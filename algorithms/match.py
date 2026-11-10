@@ -56,6 +56,7 @@ if __name__ == "__main__":  # demonstração rápida
     from game.scenarios import SCENARIOS
     from .base import GreedyAgent, RandomAgent
 
+    sys.stdout.reconfigure(encoding="utf-8")  # '∞' e acentos em qualquer terminal
     name = sys.argv[1] if len(sys.argv) > 1 else "trap_save_heal"
     state = SCENARIOS[name]()
     print(f"Cenário: {name}"); print(render(state)); print()

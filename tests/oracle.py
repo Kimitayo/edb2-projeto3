@@ -2,7 +2,7 @@
 
 Serve apenas como GABARITO para validar o simulador e as decisões dos
 algoritmos em cenários pequenos. Não é a implementação de Minimax do
-projeto (essa é do Integrante 2, com Alfa-Beta e métricas).
+projeto.
 """
 from __future__ import annotations
 
@@ -28,10 +28,12 @@ def optimal_actions(state: BattleState) -> set[int]:
 if __name__ == "__main__":  # imprime o gabarito de todos os cenários
     import sys
     sys.setrecursionlimit(10_000)
+    sys.stdout.reconfigure(encoding="utf-8")  # acentos em qualquer terminal
     from game.scenarios import SCENARIOS
+    width = max(map(len, SCENARIOS))
     for name, make in SCENARIOS.items():
         s = make()
         solve.cache_clear()
         v = solve(s)
-        print(f"{name:16} valor={v:+.0f} ótimas={sorted(optimal_actions(s))} "
+        print(f"{name:{width}} valor={v:+.0f} ótimas={sorted(optimal_actions(s))} "
               f"legais={list(legal_actions(s))} estados={solve.cache_info().currsize}")

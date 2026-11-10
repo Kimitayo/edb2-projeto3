@@ -1,4 +1,4 @@
-"""Testes das regras da batalha (Integrante 1)."""
+"""Testes das regras da batalha."""
 import pytest
 
 from game import (Move, PokemonSpec, initial_state, legal_actions, next_state,
