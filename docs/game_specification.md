@@ -16,6 +16,17 @@ Protocolo de experimentos (orçamento, cenários, gabarito): ver [experimental_p
 
 **Por que PP e cura já no MVP:** sem eles, a jogada ótima é sempre "o ataque mais forte" (verificado com solver exato, cenário `sanity_mvp`) e nenhum algoritmo se diferenciaria.
 
+## D2b. Dados reais (PokéAPI, `game/pokeapi.py`)
+- Fonte: https://pokeapi.co (API pública, sem autenticação). Os dados usados ficam em cache em `game/data/pokeapi.json` (versionado); testes e experimentos **não acessam a rede**. Para atualizar ou incluir Pokémon/ataques: editar `WANTED` e rodar `python -m game.pokeapi fetch`.
+- Campos usados: atributos base e tipos (Pokémon); `power`, `pp`, `type`, `damage_class`, `meta.healing`, `meta.drain` (ataques); `damage_relations` (tipos).
+- Conversão para `Move`/`PokemonSpec`:
+  - atributos no nível 50, IV 31, EV 0, natureza neutra;
+  - `damage` = fórmula oficial de dano **sem fator aleatório, precisão e crítico**, com STAB (1,5) e efetividade de tipo já aplicados — por isso o spec é montado **por confronto** (`build_matchup`);
+  - `heal` = `meta.healing`% do HP máximo + `meta.drain`% do dano daquele confronto (no jogo oficial o dreno cai quando o oponente tem pouco HP; aqui é fixo);
+  - `max_pp` = PP real ÷ 5 (mínimo 1), para a árvore continuar tratável; um ataque por Pokémon é escolhido como PP ilimitado (regra de D2);
+  - quem tem mais velocidade começa (`first_player`).
+- Fora do modelo: status, alterações de atributo, habilidades, itens, ataques com recuo e ataques de status sem cura (`ValueError`). Os ataques de cada Pokémon são escolhidos à mão (2–4).
+
 ## D3. Fim de jogo
 - HP de um Pokémon = 0 → o outro vence.
 - `ply == max_plies` → **empate** (garante término mesmo com cura).
@@ -52,4 +63,4 @@ class Agent:
 
 ## Pontos em aberto
 1. Heurística `evaluate` única ou por algoritmo?
-2. Expansões futuras (tipos, atributos) — só se não comprometer o prazo.
+2. Aprovar o uso de dados reais (D2b) e as simplificações listadas.

@@ -8,6 +8,7 @@ pip install -r requirements.txt
 python -m pytest -q                 # testes das regras + gabarito dos cenários
 python -m algorithms.match          # partida de demonstração (guloso x aleatório)
 python -m tests.oracle              # recalcula o gabarito dos cenários
+python -m game.pokeapi fetch        # (só para atualizar) baixa os dados da PokéAPI
 ```
 Requer Python 3.10 ou superior. Rode os comandos a partir da raiz do repositório.
 
@@ -17,7 +18,8 @@ game/          regras, estado, interface comum e cenários (Integrante 1)
   pokemon.py     Move, PokemonSpec (dados fixos)
   state.py       BattleState, PokemonState (imutáveis)
   battle.py      legal_actions, next_state, utility, evaluate, ...
-  scenarios.py   cenários sanity / trap / large
+  scenarios.py   cenários sanity / trap / large / real
+  pokeapi.py     conversão de dados reais da PokéAPI (cache em data/pokeapi.json)
 algorithms/    agentes
   base.py        contrato: Agent, Budget, Decision + RandomAgent, GreedyAgent
   match.py       play_match (partida entre dois agentes)

@@ -21,6 +21,9 @@ EXPECTED = {
     "trap_save_nuke": (+1, {0}),
     "trap_2v3": (+1, {0}),
     "trap_3v3": (+1, {0}),
+    "real_lucario_venusaur": (+1, {0}),
+    "real_venusaur_breloom": (+1, {0}),
+    "real_venusaur_machamp": (+1, {0}),
 }
 
 
@@ -32,7 +35,7 @@ def test_oracle_answer_key(name):
     assert optimal_actions(s) == best
 
 
-@pytest.mark.parametrize("name", [n for n in EXPECTED if n.startswith("trap")])
+@pytest.mark.parametrize("name", [n for n in EXPECTED if n.startswith(("trap", "real"))])
 def test_greedy_falls_into_traps(name):
     s = SCENARIOS[name]()
     assert GreedyAgent().choose_action(s, Budget()).action not in EXPECTED[name][1]

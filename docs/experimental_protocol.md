@@ -13,7 +13,8 @@ Regras do jogo e interfaces: ver [game_specification.md](game_specification.md).
 - `game/scenarios.py`, com três categorias:
   - `sanity`: decisão trivial (verifica se o algoritmo não é "burro");
   - `trap`: jogada ótima **única** em que o agente guloso **erra** (mede a qualidade da decisão);
-  - `large`: árvore grande, sem gabarito obrigatório (mede custo/orçamento).
+  - `large`: árvore grande, sem gabarito obrigatório (mede custo/orçamento);
+  - `real`: confrontos com dados reais da PokéAPI (ver D2b em `game_specification.md`), escolhidos para também serem armadilhas (jogada ótima única e o guloso erra).
 - O gabarito é calculado pelo solver exato (`tests/oracle.py`, negamax sem poda, usado **só** como gabarito) e fixado em `tests/test_scenarios.py::EXPECTED`.
 - Cenário novo: rodar `python -m tests.oracle`, conferir o resultado e só então registrar em `EXPECTED`.
 - Separar os cenários usados para **definir** a política híbrida dos usados para **avaliá-la** (a definir pelos Integrantes 4 e 5).

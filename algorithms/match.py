@@ -60,7 +60,12 @@ if __name__ == "__main__":  # demonstração rápida
     state = SCENARIOS[name]()
     print(f"Cenário: {name}"); print(render(state)); print()
     r = play_match((GreedyAgent(), RandomAgent(seed=42)), state)
-    for st in r.steps:
-        print(f"ply {st.ply:2}: J{st.player} usa {st.move_name}")
+    width = max(len(st.move_name) for st in r.steps)
+    s = state
+    for st in r.steps:  # reaplica as ações para mostrar o HP após cada jogada
+        s = next_state(s, st.action)
+        hp = " | ".join(f"{m.spec.name} {m.hp}/{m.spec.max_hp}" for m in s.team)
+        print(f"ply {st.ply:2}: J{st.player} {state.team[st.player].spec.name} "
+              f"usa {st.move_name:<{width}}  -> {hp}")
     print(); print(render(r.final_state))
     print("Resultado:", "empate" if r.winner is None else f"vitória do J{r.winner}")
