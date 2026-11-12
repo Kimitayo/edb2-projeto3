@@ -1,0 +1,498 @@
+{
+ "move": {
+  "aura-sphere": {
+   "damage_class": "special",
+   "drain": 0,
+   "healing": 0,
+   "power": 80,
+   "pp": 20,
+   "type": "fighting"
+  },
+  "body-slam": {
+   "damage_class": "physical",
+   "drain": 0,
+   "healing": 0,
+   "power": 85,
+   "pp": 15,
+   "type": "normal"
+  },
+  "close-combat": {
+   "damage_class": "physical",
+   "drain": 0,
+   "healing": 0,
+   "power": 120,
+   "pp": 5,
+   "type": "fighting"
+  },
+  "drain-punch": {
+   "damage_class": "physical",
+   "drain": 50,
+   "healing": 0,
+   "power": 75,
+   "pp": 10,
+   "type": "fighting"
+  },
+  "giga-drain": {
+   "damage_class": "special",
+   "drain": 50,
+   "healing": 0,
+   "power": 75,
+   "pp": 10,
+   "type": "grass"
+  },
+  "mach-punch": {
+   "damage_class": "physical",
+   "drain": 0,
+   "healing": 0,
+   "power": 40,
+   "pp": 30,
+   "type": "fighting"
+  },
+  "pound": {
+   "damage_class": "physical",
+   "drain": 0,
+   "healing": 0,
+   "power": 40,
+   "pp": 35,
+   "type": "normal"
+  },
+  "psychic": {
+   "damage_class": "special",
+   "drain": 0,
+   "healing": 0,
+   "power": 90,
+   "pp": 10,
+   "type": "psychic"
+  },
+  "recover": {
+   "damage_class": "status",
+   "drain": 0,
+   "healing": 50,
+   "power": null,
+   "pp": 5,
+   "type": "normal"
+  },
+  "scald": {
+   "damage_class": "special",
+   "drain": 0,
+   "healing": 0,
+   "power": 80,
+   "pp": 15,
+   "type": "water"
+  },
+  "seed-bomb": {
+   "damage_class": "physical",
+   "drain": 0,
+   "healing": 0,
+   "power": 80,
+   "pp": 15,
+   "type": "grass"
+  },
+  "shadow-ball": {
+   "damage_class": "special",
+   "drain": 0,
+   "healing": 0,
+   "power": 80,
+   "pp": 15,
+   "type": "ghost"
+  },
+  "slack-off": {
+   "damage_class": "status",
+   "drain": 0,
+   "healing": 50,
+   "power": null,
+   "pp": 5,
+   "type": "normal"
+  },
+  "soft-boiled": {
+   "damage_class": "status",
+   "drain": 0,
+   "healing": 50,
+   "power": null,
+   "pp": 5,
+   "type": "normal"
+  },
+  "tackle": {
+   "damage_class": "physical",
+   "drain": 0,
+   "healing": 0,
+   "power": 40,
+   "pp": 35,
+   "type": "normal"
+  },
+  "water-gun": {
+   "damage_class": "special",
+   "drain": 0,
+   "healing": 0,
+   "power": 40,
+   "pp": 25,
+   "type": "water"
+  }
+ },
+ "pokemon": {
+  "breloom": {
+   "stats": {
+    "attack": 130,
+    "defense": 80,
+    "hp": 60,
+    "special-attack": 60,
+    "special-defense": 60,
+    "speed": 70
+   },
+   "types": [
+    "grass",
+    "fighting"
+   ]
+  },
+  "chansey": {
+   "stats": {
+    "attack": 5,
+    "defense": 5,
+    "hp": 250,
+    "special-attack": 35,
+    "special-defense": 105,
+    "speed": 50
+   },
+   "types": [
+    "normal"
+   ]
+  },
+  "gengar": {
+   "stats": {
+    "attack": 65,
+    "defense": 60,
+    "hp": 60,
+    "special-attack": 130,
+    "special-defense": 75,
+    "speed": 110
+   },
+   "types": [
+    "ghost",
+    "poison"
+   ]
+  },
+  "lucario": {
+   "stats": {
+    "attack": 110,
+    "defense": 70,
+    "hp": 70,
+    "special-attack": 115,
+    "special-defense": 70,
+    "speed": 90
+   },
+   "types": [
+    "fighting",
+    "steel"
+   ]
+  },
+  "machamp": {
+   "stats": {
+    "attack": 130,
+    "defense": 80,
+    "hp": 90,
+    "special-attack": 65,
+    "special-defense": 85,
+    "speed": 55
+   },
+   "types": [
+    "fighting"
+   ]
+  },
+  "slowbro": {
+   "stats": {
+    "attack": 75,
+    "defense": 110,
+    "hp": 95,
+    "special-attack": 100,
+    "special-defense": 80,
+    "speed": 30
+   },
+   "types": [
+    "water",
+    "psychic"
+   ]
+  },
+  "snorlax": {
+   "stats": {
+    "attack": 110,
+    "defense": 65,
+    "hp": 160,
+    "special-attack": 65,
+    "special-defense": 110,
+    "speed": 30
+   },
+   "types": [
+    "normal"
+   ]
+  },
+  "venusaur": {
+   "stats": {
+    "attack": 82,
+    "defense": 83,
+    "hp": 80,
+    "special-attack": 100,
+    "special-defense": 100,
+    "speed": 80
+   },
+   "types": [
+    "grass",
+    "poison"
+   ]
+  }
+ },
+ "type": {
+  "bug": {
+   "double_damage_to": [
+    "dark",
+    "grass",
+    "psychic"
+   ],
+   "half_damage_to": [
+    "fairy",
+    "fighting",
+    "fire",
+    "flying",
+    "ghost",
+    "poison",
+    "steel"
+   ],
+   "no_damage_to": []
+  },
+  "dark": {
+   "double_damage_to": [
+    "ghost",
+    "psychic"
+   ],
+   "half_damage_to": [
+    "dark",
+    "fairy",
+    "fighting"
+   ],
+   "no_damage_to": []
+  },
+  "dragon": {
+   "double_damage_to": [
+    "dragon"
+   ],
+   "half_damage_to": [
+    "steel"
+   ],
+   "no_damage_to": [
+    "fairy"
+   ]
+  },
+  "electric": {
+   "double_damage_to": [
+    "flying",
+    "water"
+   ],
+   "half_damage_to": [
+    "dragon",
+    "electric",
+    "grass"
+   ],
+   "no_damage_to": [
+    "ground"
+   ]
+  },
+  "fairy": {
+   "double_damage_to": [
+    "dark",
+    "dragon",
+    "fighting"
+   ],
+   "half_damage_to": [
+    "fire",
+    "poison",
+    "steel"
+   ],
+   "no_damage_to": []
+  },
+  "fighting": {
+   "double_damage_to": [
+    "dark",
+    "ice",
+    "normal",
+    "rock",
+    "steel"
+   ],
+   "half_damage_to": [
+    "bug",
+    "fairy",
+    "flying",
+    "poison",
+    "psychic"
+   ],
+   "no_damage_to": [
+    "ghost"
+   ]
+  },
+  "fire": {
+   "double_damage_to": [
+    "bug",
+    "grass",
+    "ice",
+    "steel"
+   ],
+   "half_damage_to": [
+    "dragon",
+    "fire",
+    "rock",
+    "water"
+   ],
+   "no_damage_to": []
+  },
+  "flying": {
+   "double_damage_to": [
+    "bug",
+    "fighting",
+    "grass"
+   ],
+   "half_damage_to": [
+    "electric",
+    "rock",
+    "steel"
+   ],
+   "no_damage_to": []
+  },
+  "ghost": {
+   "double_damage_to": [
+    "ghost",
+    "psychic"
+   ],
+   "half_damage_to": [
+    "dark"
+   ],
+   "no_damage_to": [
+    "normal"
+   ]
+  },
+  "grass": {
+   "double_damage_to": [
+    "ground",
+    "rock",
+    "water"
+   ],
+   "half_damage_to": [
+    "bug",
+    "dragon",
+    "fire",
+    "flying",
+    "grass",
+    "poison",
+    "steel"
+   ],
+   "no_damage_to": []
+  },
+  "ground": {
+   "double_damage_to": [
+    "electric",
+    "fire",
+    "poison",
+    "rock",
+    "steel"
+   ],
+   "half_damage_to": [
+    "bug",
+    "grass"
+   ],
+   "no_damage_to": [
+    "flying"
+   ]
+  },
+  "ice": {
+   "double_damage_to": [
+    "dragon",
+    "flying",
+    "grass",
+    "ground"
+   ],
+   "half_damage_to": [
+    "fire",
+    "ice",
+    "steel",
+    "water"
+   ],
+   "no_damage_to": []
+  },
+  "normal": {
+   "double_damage_to": [],
+   "half_damage_to": [
+    "rock",
+    "steel"
+   ],
+   "no_damage_to": [
+    "ghost"
+   ]
+  },
+  "poison": {
+   "double_damage_to": [
+    "fairy",
+    "grass"
+   ],
+   "half_damage_to": [
+    "ghost",
+    "ground",
+    "poison",
+    "rock"
+   ],
+   "no_damage_to": [
+    "steel"
+   ]
+  },
+  "psychic": {
+   "double_damage_to": [
+    "fighting",
+    "poison"
+   ],
+   "half_damage_to": [
+    "psychic",
+    "steel"
+   ],
+   "no_damage_to": [
+    "dark"
+   ]
+  },
+  "rock": {
+   "double_damage_to": [
+    "bug",
+    "fire",
+    "flying",
+    "ice"
+   ],
+   "half_damage_to": [
+    "fighting",
+    "ground",
+    "steel"
+   ],
+   "no_damage_to": []
+  },
+  "steel": {
+   "double_damage_to": [
+    "fairy",
+    "ice",
+    "rock"
+   ],
+   "half_damage_to": [
+    "electric",
+    "fire",
+    "steel",
+    "water"
+   ],
+   "no_damage_to": []
+  },
+  "water": {
+   "double_damage_to": [
+    "fire",
+    "ground",
+    "rock"
+   ],
+   "half_damage_to": [
+    "dragon",
+    "grass",
+    "water"
+   ],
+   "no_damage_to": []
+  }
+ }
+}
