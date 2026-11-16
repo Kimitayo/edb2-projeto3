@@ -252,18 +252,41 @@ def next_state(state: chess.Board, action: Action) -> chess.Board:
 def is_terminal(state: chess.Board) -> bool:
     """True em mate, afogamento, material insuficiente, regra dos 75,
     5ª repetição ou reivindicação de empate aceita."""
-    raise NotImplementedError("Etapa 4")
+    return _is_over(state)
 
 
 def get_outcome(state: chess.Board) -> Outcome:
-    """Vitória das brancas, das pretas, empate ou em andamento."""
-    raise NotImplementedError("Etapa 4")
+    """Vitória das brancas, das pretas, empate ou em andamento.
+
+    O mate tem precedência sobre os empates automáticos (ex.: um mate no
+    150º meio-lance vale como mate, não como regra dos 75)."""
+    if getattr(state, "claimed_draw", None) is not None:
+        return Outcome(Result.DRAW, "claimed_draw")
+    o = state.outcome(claim_draw=False)
+    if o is None:
+        return Outcome(Result.ONGOING)
+    if o.winner is chess.WHITE:
+        result = Result.WHITE_WINS
+    elif o.winner is chess.BLACK:
+        result = Result.BLACK_WINS
+    else:
+        result = Result.DRAW
+    return Outcome(result, o.termination.name.lower())
 
 
 def utility(state: chess.Board, player: chess.Color) -> float:
     """+1 (vitória), 0 (empate) ou -1 (derrota) para `player`.
     Só definida em estados terminais (ValueError caso contrário)."""
-    raise NotImplementedError("Etapa 4")
+    # Exige bool: 0/1 seriam aceitos por igualdade (0 == False == BLACK),
+    # mas no código antigo 0 era o primeiro jogador (brancas).
+    if not isinstance(player, bool):
+        raise ValueError(f"Jogador deve ser chess.WHITE ou chess.BLACK, não {player!r}")
+    if not _is_over(state):
+        raise ValueError("utility() só é definida para estados terminais")
+    winner = get_outcome(state).winner
+    if winner is None:
+        return 0.0
+    return 1.0 if winner == player else -1.0
 
 
 # --- Depuração e registro ---------------------------------------------------

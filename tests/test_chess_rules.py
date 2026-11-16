@@ -6,7 +6,8 @@ import pytest
 
 import game
 from game import (ChessState, ClaimDraw, Outcome, Result, from_moves,
-                  initial_state, legal_actions, next_state)
+                  get_outcome, initial_state, is_terminal, legal_actions,
+                  next_state, utility)
 
 
 # --- Etapa 1: contrato da interface -----------------------------------------
@@ -259,3 +260,91 @@ def test_no_actions_after_claimed_draw():
         next_state(s, mv("g1f3"))
     with pytest.raises(ValueError):
         next_state(s, ClaimDraw())
+
+
+# --- Etapa 4: fim de jogo e utilidade ---------------------------------------
+FOOLS_MATE = ["f2f3", "e7e5", "g2g4", "d8h4"]          # pretas vencem
+SCHOLARS_MATE = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"]
+# Brancas: Rg6 + Ta1 contra Rg8. Ta8 é mate; Ta2 não é.
+SEVENTYFIVE_FEN = "6k1/8/6K1/8/8/8/8/R7 w - - 149 100"
+
+
+def assert_terminal(s, result, reason):
+    assert is_terminal(s)
+    assert get_outcome(s) == Outcome(result, reason)
+    assert legal_actions(s) == ()
+
+
+def test_initial_position_is_ongoing():
+    s = initial_state()
+    assert not is_terminal(s)
+    assert get_outcome(s) == Outcome(Result.ONGOING, None)
+    with pytest.raises(ValueError):
+        utility(s, chess.WHITE)
+
+
+def test_checkmate_black_wins():
+    s = from_moves(FOOLS_MATE)
+    assert_terminal(s, Result.BLACK_WINS, "checkmate")
+    assert utility(s, chess.BLACK) == 1.0
+    assert utility(s, chess.WHITE) == -1.0
+
+
+def test_checkmate_white_wins():
+    s = from_moves(SCHOLARS_MATE)
+    assert_terminal(s, Result.WHITE_WINS, "checkmate")
+    assert utility(s, chess.WHITE) == 1.0
+    assert utility(s, chess.BLACK) == -1.0
+
+
+def test_stalemate():
+    s = initial_state("7k/5Q2/6K1/8/8/8/8/8 b - - 0 1")
+    assert_terminal(s, Result.DRAW, "stalemate")
+    assert utility(s, chess.WHITE) == utility(s, chess.BLACK) == 0.0
+
+
+@pytest.mark.parametrize("fen", [
+    "8/8/8/4k3/8/8/8/4K3 w - - 0 1",        # K x K
+    "8/8/8/4k3/8/8/8/4KB2 w - - 0 1",       # K+B x K
+    "8/8/8/4k3/8/8/8/4KN2 w - - 0 1",       # K+N x K
+])
+def test_insufficient_material(fen):
+    assert_terminal(initial_state(fen), Result.DRAW, "insufficient_material")
+
+
+def test_sufficient_material_is_not_terminal():
+    assert not is_terminal(initial_state("8/8/8/4k3/8/8/8/4K2R w - - 0 1"))
+
+
+def test_seventyfive_moves_rule():
+    s = next_state(initial_state(SEVENTYFIVE_FEN), mv("a1a2"))
+    assert s.halfmove_clock == 150
+    assert_terminal(s, Result.DRAW, "seventyfive_moves")
+
+
+def test_checkmate_has_precedence_over_seventyfive_moves():
+    s = next_state(initial_state(SEVENTYFIVE_FEN), mv("a1a8"))
+    assert s.halfmove_clock == 150
+    assert_terminal(s, Result.WHITE_WINS, "checkmate")
+
+
+def test_fivefold_repetition_is_automatic():
+    s = from_moves(KNIGHT_SHUFFLE * 4)
+    assert_terminal(s, Result.DRAW, "fivefold_repetition")
+
+
+def test_threefold_repetition_is_not_automatic():
+    s = from_moves(KNIGHT_SHUFFLE * 2)
+    assert not is_terminal(s)          # só termina se alguém reivindicar
+
+
+def test_claimed_draw_outcome():
+    s = next_state(from_moves(KNIGHT_SHUFFLE * 2), ClaimDraw())
+    assert_terminal(s, Result.DRAW, "claimed_draw")
+    assert utility(s, chess.WHITE) == 0.0
+
+
+@pytest.mark.parametrize("player", [0, 1, "white", None])
+def test_utility_rejects_invalid_player(player):
+    with pytest.raises(ValueError):
+        utility(from_moves(FOOLS_MATE), player)
