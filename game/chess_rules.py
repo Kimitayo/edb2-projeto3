@@ -17,8 +17,9 @@ Contrato público:
     reset_transition_count() / transition_count()
 
 Convenções:
-- Estado = chess.Board com histórico (move_stack). Nunca é modificado:
-  next_state trabalha numa cópia feita com copy(stack=True).
+- Estado = ChessState, subclasse de chess.Board com histórico (move_stack)
+  e o campo `claimed_draw`. Nunca é modificado: next_state trabalha numa
+  cópia feita com copy(stack=True).
 - Jogador = chess.WHITE (True) ou chess.BLACK (False).
 - Ação = chess.Move ou ClaimDraw (reivindicação de empate).
 - Transição = uma chamada bem-sucedida a next_state. O contador é global e
@@ -36,7 +37,7 @@ from typing import Iterable, Optional, Union
 import chess
 
 __all__ = [
-    "ClaimDraw", "Action", "Result", "Outcome",
+    "ClaimDraw", "Action", "Result", "Outcome", "ChessState",
     "initial_state", "from_moves", "legal_actions", "next_state",
     "is_terminal", "get_outcome", "utility", "render",
     "serialize", "deserialize",
@@ -103,17 +104,65 @@ def transition_count() -> int:
     return _transitions
 
 
+# --- Estado -----------------------------------------------------------------
+class ChessState(chess.Board):
+    """chess.Board com um campo a mais: a reivindicação de empate aceita.
+
+    Continua sendo um chess.Board (isinstance funciona e toda a API da
+    biblioteca está disponível). `claimed_draw` é None enquanto ninguém
+    reivindicou empate; copy() o preserva.
+    """
+
+    def __init__(self, fen: Optional[str] = chess.STARTING_FEN, *,
+                 chess960: bool = False) -> None:
+        super().__init__(fen, chess960=chess960)
+        self.claimed_draw: Optional[ClaimDraw] = None
+
+    def copy(self, *, stack: Union[bool, int] = True) -> "ChessState":
+        board = super().copy(stack=stack)
+        board.claimed_draw = self.claimed_draw
+        return board
+
+
+def _as_state(board: chess.Board) -> ChessState:
+    """Converte um chess.Board comum em ChessState, preservando o histórico."""
+    if isinstance(board, ChessState):
+        return board
+    state = ChessState(board.root().fen())
+    for move in board.move_stack:
+        state.push(move)
+    return state
+
+
+def _is_over(state: chess.Board) -> bool:
+    """Fim de jogo automático ou por reivindicação aceita."""
+    return (getattr(state, "claimed_draw", None) is not None
+            or state.is_game_over(claim_draw=False))
+
+
 # --- Criação de estados -----------------------------------------------------
-def initial_state(fen: Optional[str] = None) -> chess.Board:
-    """Posição inicial padrão, ou a posição `fen` (sem histórico anterior)."""
-    raise NotImplementedError("Etapa 2")
+def initial_state(fen: Optional[str] = None) -> ChessState:
+    """Posição inicial padrão, ou a posição `fen` (sem histórico anterior).
+    ValueError se a FEN for inválida ou descrever uma posição ilegal."""
+    state = ChessState(fen if fen is not None else chess.STARTING_FEN)
+    if not state.is_valid():
+        raise ValueError(f"Posição inválida: {fen!r} ({state.status()!r})")
+    return state
 
 
 def from_moves(moves: Iterable[Union[str, chess.Move]],
-               start_fen: Optional[str] = None) -> chess.Board:
+               start_fen: Optional[str] = None) -> ChessState:
     """Reconstrói um estado aplicando `moves` (UCI ou chess.Move) a partir de
-    `start_fen` (ou da posição inicial), preservando o histórico."""
-    raise NotImplementedError("Etapa 2")
+    `start_fen` (ou da posição inicial), preservando o histórico.
+    ValueError se algum lance for ilegal ou vier depois do fim da partida.
+    Não conta transições (não é uma busca)."""
+    state = initial_state(start_fen)
+    for i, m in enumerate(moves):
+        move = chess.Move.from_uci(m) if isinstance(m, str) else m
+        if _is_over(state) or not state.is_legal(move):
+            raise ValueError(f"Lance {i + 1} ({move.uci()}) ilegal em {state.fen()}")
+        state.push(move)
+    return state
 
 
 # --- Regras -----------------------------------------------------------------
@@ -125,8 +174,21 @@ def legal_actions(state: chess.Board) -> tuple[Action, ...]:
 
 def next_state(state: chess.Board, action: Action) -> chess.Board:
     """Novo estado após `action`. Valida a legalidade (ValueError se ilegal),
-    nunca modifica `state` e incrementa o contador de transições."""
-    raise NotImplementedError("Etapa 2")
+    nunca modifica `state` e incrementa o contador de transições.
+    Aceita chess.Board comum; o retorno é sempre um ChessState."""
+    global _transitions
+    if isinstance(action, ClaimDraw):
+        raise NotImplementedError("Reivindicação de empate: Etapa 3")
+    if not isinstance(action, chess.Move):
+        raise TypeError(f"Ação deve ser chess.Move ou ClaimDraw, não {type(action).__name__}")
+    if _is_over(state):
+        raise ValueError(f"Partida encerrada; nenhuma ação é permitida em {state.fen()}")
+    if not state.is_legal(action):
+        raise ValueError(f"Lance ilegal {action.uci()} em {state.fen()}")
+    child = _as_state(state).copy(stack=True)
+    child.push(action)
+    _transitions += 1
+    return child
 
 
 def is_terminal(state: chess.Board) -> bool:

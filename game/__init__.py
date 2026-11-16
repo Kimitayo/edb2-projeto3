@@ -3,14 +3,14 @@
 Especificação: docs/PLANO_PROJETO_XADREZ_EDBII.md, Seção 3.
 Uso: from game import legal_actions, next_state, is_terminal, ...
 """
-from .chess_rules import (ClaimDraw, Action, Result, Outcome,
+from .chess_rules import (ClaimDraw, Action, Result, Outcome, ChessState,
                           initial_state, from_moves, legal_actions, next_state,
                           is_terminal, get_outcome, utility, render,
                           serialize, deserialize,
                           reset_transition_count, transition_count)
 
 __all__ = [
-    "ClaimDraw", "Action", "Result", "Outcome",
+    "ClaimDraw", "Action", "Result", "Outcome", "ChessState",
     "initial_state", "from_moves", "legal_actions", "next_state",
     "is_terminal", "get_outcome", "utility", "render",
     "serialize", "deserialize",
