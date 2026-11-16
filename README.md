@@ -13,13 +13,16 @@ python -m venv .venv
 
 pip install -r requirements.txt
 python -m pytest -q
+python -m game                      # partida aleatória animada (demonstração do motor)
 ```
+No PowerShell, se `activate` for bloqueado, rode `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` uma vez ou use `.venv\Scripts\python.exe` diretamente.
 
 ## Estrutura
 ```text
 game/            motor de xadrez e interface comum (Integrante 1)
-  chess_rules.py   regras, estado (chess.Board) e interface comum — em implementação
-  positions.py     posições de teste — em implementação
+  chess_rules.py   regras, estado (ChessState/chess.Board) e interface comum
+  positions.py     catálogo de posições funcionais (python -m game.positions)
+  __main__.py      demonstração visual (python -m game)
 algorithms/      agentes
   base.py          contrato: Agent, Budget, Decision + RandomAgent, GreedyAgent
   match.py         play_match (partida entre dois agentes) + demonstração
@@ -28,7 +31,7 @@ algorithms/      agentes
   gpn_mcts.py      GPN-MCTS (Integrante 3)
   hybrid.py        busca híbrida (Integrante 4)
 tests/
-  test_chess_rules.py  regras do xadrez — em implementação
+  test_chess_rules.py  regras do xadrez e interface do motor
 docs/            PLANO_PROJETO_XADREZ_EDBII.md, game_specification.md, experimental_protocol.md, hybrid_strategy.md
 paper/           artigo
 conftest.py      permite rodar o pytest de qualquer pasta
@@ -37,7 +40,7 @@ requirements.txt dependências (python-chess, pytest)
 
 ## Exemplo mínimo para quem implementa um algoritmo
 ```python
-from game import legal_actions, next_state, is_terminal, utility, evaluate
+from game import legal_actions, next_state, is_terminal, utility   # motor (ver docs/game_specification.md)
 from algorithms.base import Agent, Budget, Decision
 
 class MeuAgente(Agent):
@@ -48,7 +51,7 @@ class MeuAgente(Agent):
 ```
 
 ## Status
-- [ ] Motor de xadrez e interface comum (Integrante 1)
+- [x] Motor de xadrez e interface comum (Integrante 1) — ver [docs/game_specification.md](docs/game_specification.md)
 - [ ] Minimax + Alfa-Beta (Integrante 2)
 - [ ] MCTS / GPN-MCTS (Integrante 3)
 - [ ] Busca híbrida (Integrante 4)
