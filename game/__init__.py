@@ -1,6 +1,18 @@
 """Motor de xadrez do projeto (Integrante 1).
 
 Especificação: docs/PLANO_PROJETO_XADREZ_EDBII.md, Seção 3.
-A interface comum (legal_actions, next_state, is_terminal, get_outcome,
-utility, render, serialize) será publicada em game/chess_rules.py.
+Uso: from game import legal_actions, next_state, is_terminal, ...
 """
+from .chess_rules import (ClaimDraw, Action, Result, Outcome,
+                          initial_state, from_moves, legal_actions, next_state,
+                          is_terminal, get_outcome, utility, render,
+                          serialize, deserialize,
+                          reset_transition_count, transition_count)
+
+__all__ = [
+    "ClaimDraw", "Action", "Result", "Outcome",
+    "initial_state", "from_moves", "legal_actions", "next_state",
+    "is_terminal", "get_outcome", "utility", "render",
+    "serialize", "deserialize",
+    "reset_transition_count", "transition_count",
+]
