@@ -1,5 +1,6 @@
-from .pokemon import Move, PokemonSpec
-from .state import BattleState, PokemonState, initial_state, opponent, PLAYERS
-from .battle import (legal_actions, next_state, is_terminal, get_winner,
-                     utility, evaluate, render, to_dict, state_features,
-                     reset_transition_count, transition_count)
+"""Motor de xadrez do projeto (Integrante 1).
+
+Especificação: docs/PLANO_PROJETO_XADREZ_EDBII.md, Seção 3.
+A interface comum (legal_actions, next_state, is_terminal, get_outcome,
+utility, render, serialize) será publicada em game/chess_rules.py.
+"""
