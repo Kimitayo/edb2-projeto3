@@ -165,20 +165,78 @@ def from_moves(moves: Iterable[Union[str, chess.Move]],
     return state
 
 
+# --- Reivindicação de empate ------------------------------------------------
+# Uma repetição tripla exige ao menos 8 meios-lances reversíveis seguidos
+# (posição em p, p+4 e p+8). Abaixo disso nenhum lance pode gerar uma
+# reivindicação por repetição, e o teste lance a lance é pulado.
+_MIN_CLOCK_FOR_REPETITION = 7
+_FIFTY_MOVES_PLIES = 100
+
+
+def _claimable_now(board: chess.Board) -> bool:
+    """3ª repetição da posição atual ou 50 lances sem captura/movimento de peão."""
+    return board.halfmove_clock >= _FIFTY_MOVES_PLIES or board.is_repetition(3)
+
+
+def _claimable_after(board: chess.Board, move: chess.Move) -> bool:
+    """O lance pretendido `move` (legal) tornaria a reivindicação válida?
+    Um lance que dá mate não gera reivindicação (o jogador simplesmente vence)."""
+    board.push(move)
+    try:
+        return _claimable_now(board) and not board.is_checkmate()
+    finally:
+        board.pop()
+
+
+def _claim_is_valid(state: chess.Board, claim: ClaimDraw) -> bool:
+    if _is_over(state):
+        return False
+    if claim.move is None:
+        return _claimable_now(state)
+    if not state.is_legal(claim.move):
+        return False
+    return _claimable_after(state.copy(stack=True), claim.move)
+
+
 # --- Regras -----------------------------------------------------------------
 def legal_actions(state: chess.Board) -> tuple[Action, ...]:
     """Lances legais (ordem UCI) seguidos das reivindicações de empate válidas.
-    Devolve () em estados terminais."""
-    raise NotImplementedError("Etapa 3")
+    Devolve () em estados terminais.
+
+    Reivindicações:
+    - se a posição atual já permite reivindicar, só ClaimDraw() é incluída
+      (reivindicações com lance pretendido levariam ao mesmo empate);
+    - caso contrário, ClaimDraw(m) para cada lance m que tornaria a
+      reivindicação válida (ordem UCI).
+    """
+    if _is_over(state):
+        return ()
+    moves = sorted(state.legal_moves, key=chess.Move.uci)
+    if _claimable_now(state):
+        return (*moves, ClaimDraw())
+    if state.halfmove_clock < _MIN_CLOCK_FOR_REPETITION:  # atalho de desempenho
+        return tuple(moves)
+    probe = state.copy(stack=True)
+    claims = [ClaimDraw(m) for m in moves if _claimable_after(probe, m)]
+    return (*moves, *claims)
 
 
 def next_state(state: chess.Board, action: Action) -> chess.Board:
     """Novo estado após `action`. Valida a legalidade (ValueError se ilegal),
     nunca modifica `state` e incrementa o contador de transições.
-    Aceita chess.Board comum; o retorno é sempre um ChessState."""
+    Aceita chess.Board comum; o retorno é sempre um ChessState.
+
+    ClaimDraw: o estado sucessor é a mesma posição, com `claimed_draw`
+    preenchido (partida encerrada em empate). O lance pretendido NÃO é
+    executado."""
     global _transitions
     if isinstance(action, ClaimDraw):
-        raise NotImplementedError("Reivindicação de empate: Etapa 3")
+        if not _claim_is_valid(state, action):
+            raise ValueError(f"Reivindicação inválida {action.uci()} em {state.fen()}")
+        child = _as_state(state).copy(stack=True)
+        child.claimed_draw = action
+        _transitions += 1
+        return child
     if not isinstance(action, chess.Move):
         raise TypeError(f"Ação deve ser chess.Move ou ClaimDraw, não {type(action).__name__}")
     if _is_over(state):

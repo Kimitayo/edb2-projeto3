@@ -6,7 +6,7 @@ import pytest
 
 import game
 from game import (ChessState, ClaimDraw, Outcome, Result, from_moves,
-                  initial_state, next_state)
+                  initial_state, legal_actions, next_state)
 
 
 # --- Etapa 1: contrato da interface -----------------------------------------
@@ -178,6 +178,84 @@ def test_copy_preserves_claimed_draw():
     assert s.copy(stack=False).claimed_draw == ClaimDraw()
 
 
-def test_claim_draw_not_yet_supported():
-    with pytest.raises(NotImplementedError):
-        next_state(initial_state(), ClaimDraw())
+# --- Etapa 3: ações legais e reivindicação de empate ------------------------
+def mv(uci):
+    return chess.Move.from_uci(uci)
+
+
+def claims(actions):
+    return [a for a in actions if isinstance(a, ClaimDraw)]
+
+
+# Rei preto em g8; brancas com rei g6 e torre a1. Pretas só têm Kf8 e Kh8.
+FIFTY_FEN = "6k1/8/6K1/8/8/8/8/R7 b - - {clock} 80"
+
+
+def test_legal_actions_initial_position():
+    actions = legal_actions(initial_state())
+    assert len(actions) == 20
+    assert all(isinstance(a, chess.Move) for a in actions)
+    assert [a.uci() for a in actions] == sorted(a.uci() for a in actions)
+
+
+def test_legal_actions_are_exactly_the_legal_moves():
+    s = from_moves(["e2e4", "d7d5", "e4d5", "d8d5", "b1c3"])
+    moves = [a for a in legal_actions(s) if isinstance(a, chess.Move)]
+    assert set(moves) == set(s.legal_moves)
+    assert claims(legal_actions(s)) == []
+
+
+def test_threefold_repetition_claim_now():
+    s = from_moves(KNIGHT_SHUFFLE * 2)            # posição inicial pela 3ª vez
+    assert claims(legal_actions(s)) == [ClaimDraw()]
+    assert legal_actions(s)[-1] == ClaimDraw()     # reivindicações vêm depois dos lances
+
+
+def test_threefold_repetition_claim_with_intended_move():
+    s = from_moves((KNIGHT_SHUFFLE * 2)[:-1])     # f6g8 repetiria pela 3ª vez
+    assert claims(legal_actions(s)) == [ClaimDraw(mv("f6g8"))]
+
+
+def test_fifty_moves_claim_now():
+    s = initial_state(FIFTY_FEN.format(clock=100))
+    assert claims(legal_actions(s)) == [ClaimDraw()]
+
+
+def test_fifty_moves_claim_with_intended_move():
+    s = initial_state(FIFTY_FEN.format(clock=99))
+    assert claims(legal_actions(s)) == [ClaimDraw(mv("g8f8")), ClaimDraw(mv("g8h8"))]
+
+
+def test_no_claim_below_fifty_moves():
+    s = initial_state(FIFTY_FEN.format(clock=98))
+    assert claims(legal_actions(s)) == []
+
+
+def test_claim_draw_ends_game_without_playing_the_move():
+    s = from_moves((KNIGHT_SHUFFLE * 2)[:-1])
+    game.reset_transition_count()
+    child = next_state(s, ClaimDraw(mv("f6g8")))
+    assert child.claimed_draw == ClaimDraw(mv("f6g8"))
+    assert child.move_stack == s.move_stack           # lance pretendido não executado
+    assert child.fen() == s.fen()
+    assert s.claimed_draw is None                      # original intacto
+    assert legal_actions(child) == ()
+    assert game.transition_count() == 1
+
+
+@pytest.mark.parametrize("claim", [
+    ClaimDraw(),                    # posição inicial: nada a reivindicar
+    ClaimDraw(mv("g1f3")),          # lance que não gera repetição
+    ClaimDraw(mv("e2e5")),          # lance ilegal
+])
+def test_invalid_claim_is_rejected(claim):
+    with pytest.raises(ValueError):
+        next_state(initial_state(), claim)
+
+
+def test_no_actions_after_claimed_draw():
+    s = next_state(from_moves(KNIGHT_SHUFFLE * 2), ClaimDraw())
+    with pytest.raises(ValueError):
+        next_state(s, mv("g1f3"))
+    with pytest.raises(ValueError):
+        next_state(s, ClaimDraw())
