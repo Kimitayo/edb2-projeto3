@@ -2,6 +2,7 @@
 
 Projeto de EDB II (UFRN): comparação entre Minimax com poda Alfa-Beta, GPN-MCTS e uma busca híbrida contextual por Máxima Utilidade Esperada em partidas de xadrez.
 Especificação oficial: [docs/PLANO_PROJETO_XADREZ_EDBII.md](docs/PLANO_PROJETO_XADREZ_EDBII.md).
+Para começar a programar: [guia_dev.md](guia_dev.md).
 
 ## Como rodar
 Padrão do grupo: Python 3.12. Dependências em `requirements.txt` (`python-chess`, `pytest`). Rode os comandos a partir da raiz do repositório.
@@ -24,7 +25,7 @@ game/            motor de xadrez e interface comum (Integrante 1)
   positions.py     catálogo de posições funcionais (python -m game.positions)
   __main__.py      demonstração visual (python -m game)
 algorithms/      agentes
-  base.py          contrato: Agent, Budget, Decision + RandomAgent, GreedyAgent
+  base.py          contrato: Agent, Budget, Decision + RandomAgent
   match.py         play_match (partida entre dois agentes) + demonstração
   minimax.py       Minimax + Alfa-Beta (Integrante 2)
   mcts.py          MCTS (Integrante 3)
@@ -34,6 +35,7 @@ tests/
   test_chess_rules.py  regras do xadrez e interface do motor
 docs/            PLANO_PROJETO_XADREZ_EDBII.md, game_specification.md, experimental_protocol.md, hybrid_strategy.md
 paper/           artigo
+guia_dev.md      guia para os desenvolvedores: ambiente, caminhos e uso do motor
 conftest.py      permite rodar o pytest de qualquer pasta
 requirements.txt dependências (python-chess, pytest)
 ```
