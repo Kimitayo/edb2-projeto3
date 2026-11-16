@@ -348,3 +348,94 @@ def test_claimed_draw_outcome():
 def test_utility_rejects_invalid_player(player):
     with pytest.raises(ValueError):
         utility(from_moves(FOOLS_MATE), player)
+
+
+# --- Etapa 5: regras especiais ----------------------------------------------
+def ucis(state):
+    return {a.uci() for a in legal_actions(state) if isinstance(a, chess.Move)}
+
+
+CASTLING_FEN = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"
+
+
+def test_castling_both_sides():
+    s = initial_state(CASTLING_FEN)
+    assert {"e1g1", "e1c1"} <= ucis(s)
+    short = next_state(s, mv("e1g1"))
+    assert short.piece_at(chess.G1).symbol() == "K" and short.piece_at(chess.F1).symbol() == "R"
+    long = next_state(s, mv("e1c1"))
+    assert long.piece_at(chess.C1).symbol() == "K" and long.piece_at(chess.D1).symbol() == "R"
+
+
+def test_castling_black():
+    s = initial_state(CASTLING_FEN.replace(" w ", " b "))
+    assert {"e8g8", "e8c8"} <= ucis(s)
+
+
+def test_no_castling_while_in_check():
+    s = initial_state("4r1k1/8/8/8/8/8/8/R3K2R w KQ - 0 1")
+    assert s.is_check()
+    assert not {"e1g1", "e1c1"} & ucis(s)
+
+
+def test_no_castling_through_attacked_square():
+    s = initial_state("4kr2/8/8/8/8/8/8/R3K2R w KQ - 0 1")    # torre preta ataca f1
+    assert "e1g1" not in ucis(s)
+    assert "e1c1" in ucis(s)
+
+
+def test_no_castling_after_king_moved():
+    s = from_moves(["e1f1", "e8f8", "f1e1", "f8e8"], CASTLING_FEN)
+    assert not {"e1g1", "e1c1"} & ucis(s)
+
+
+def test_no_castling_after_rook_moved():
+    s = from_moves(["h1h2", "e8f8", "h2h1", "f8e8"], CASTLING_FEN)
+    assert "e1g1" not in ucis(s)
+    assert "e1c1" in ucis(s)
+
+
+def test_en_passant():
+    s = from_moves(["e2e4", "a7a6", "e4e5", "d7d5"])
+    assert "e5d6" in ucis(s)
+    child = next_state(s, mv("e5d6"))
+    assert child.piece_at(chess.D5) is None                  # peão capturado sai
+    assert child.piece_at(chess.D6).symbol() == "P"
+
+
+def test_en_passant_only_on_the_next_move():
+    s = from_moves(["e2e4", "a7a6", "e4e5", "d7d5", "a2a3", "a6a5"])
+    assert "e5d6" not in ucis(s)
+
+
+@pytest.mark.parametrize("piece", ["q", "r", "b", "n"])
+def test_all_promotions(piece):
+    s = initial_state("8/4P3/8/8/8/8/k7/4K3 w - - 0 1")
+    assert {"e7e8q", "e7e8r", "e7e8b", "e7e8n"} <= ucis(s)
+    child = next_state(s, mv("e7e8" + piece))
+    assert child.piece_at(chess.E8).symbol() == piece.upper()
+
+
+def test_promotion_with_capture():
+    s = initial_state("3r4/4P3/8/8/8/8/k7/4K3 w - - 0 1")
+    assert {"e7d8q", "e7d8r", "e7d8b", "e7d8n"} <= ucis(s)
+
+
+def test_pinned_piece_cannot_move():
+    s = initial_state("4k3/4r3/8/8/8/8/4B3/4K3 w - - 0 1")    # bispo cravado na coluna e
+    assert not any(u.startswith("e2") for u in ucis(s))
+
+
+def test_king_cannot_move_into_check():
+    # Torre preta em d2 (sem defesa) controla a coluna d e a 2ª fileira:
+    # d1, e2 e f2 são proibidas; sobram f1 e a captura em d2.
+    s = initial_state("4k3/8/8/8/8/8/3r4/4K3 w - - 0 1")
+    assert ucis(s) == {"e1f1", "e1d2"}
+
+
+def test_must_escape_check():
+    s = initial_state("4k3/8/8/8/8/8/8/r3K3 w - - 0 1")       # xeque pela 1ª fileira
+    assert s.is_check()
+    assert ucis(s) == {"e1d2", "e1e2", "e1f2"}
+    for uci in ucis(s):
+        assert not next_state(s, mv(uci)).was_into_check()
