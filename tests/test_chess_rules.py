@@ -12,6 +12,9 @@ from game import (ChessState, ClaimDraw, Outcome, Result, deserialize,
                   from_moves, get_outcome, initial_state, is_terminal,
                   legal_actions, next_state, render, render_svg, serialize,
                   to_pgn, utility)
+from game import positions
+from game.positions import (CASTLING_FEN, FIFTY_FEN, FOOLS_MATE, KNIGHT_SHUFFLE,
+                            SCHOLARS_MATE, SEVENTYFIVE_FEN)
 
 
 # --- Etapa 1: contrato da interface -----------------------------------------
@@ -57,8 +60,6 @@ def test_transition_counter_reset():
 
 # --- Etapa 2: estado e transição --------------------------------------------
 E4 = chess.Move.from_uci("e2e4")
-# Cavalos vão e voltam: a posição inicial se repete a cada 4 meios-lances.
-KNIGHT_SHUFFLE = ["g1f3", "g8f6", "f3g1", "f6g8"]
 
 
 def test_initial_state_is_standard_board():
@@ -192,8 +193,6 @@ def claims(actions):
     return [a for a in actions if isinstance(a, ClaimDraw)]
 
 
-# Rei preto em g8; brancas com rei g6 e torre a1. Pretas só têm Kf8 e Kh8.
-FIFTY_FEN = "6k1/8/6K1/8/8/8/8/R7 b - - {clock} 80"
 
 
 def test_legal_actions_initial_position():
@@ -267,10 +266,6 @@ def test_no_actions_after_claimed_draw():
 
 
 # --- Etapa 4: fim de jogo e utilidade ---------------------------------------
-FOOLS_MATE = ["f2f3", "e7e5", "g2g4", "d8h4"]          # pretas vencem
-SCHOLARS_MATE = ["e2e4", "e7e5", "f1c4", "b8c6", "d1h5", "g8f6", "h5f7"]
-# Brancas: Rg6 + Ta1 contra Rg8. Ta8 é mate; Ta2 não é.
-SEVENTYFIVE_FEN = "6k1/8/6K1/8/8/8/8/R7 w - - 149 100"
 
 
 def assert_terminal(s, result, reason):
@@ -359,7 +354,6 @@ def ucis(state):
     return {a.uci() for a in legal_actions(state) if isinstance(a, chess.Move)}
 
 
-CASTLING_FEN = "r3k2r/8/8/8/8/8/8/R3K2R w KQkq - 0 1"
 
 
 def test_castling_both_sides():
@@ -561,3 +555,39 @@ def test_demo_cli(tmp_path, capsys):
     assert f"Resultado: {outcome.result.value}" in out
     assert svg.read_text(encoding="utf-8").startswith("<svg")
     assert outcome.result.value in pgn.read_text(encoding="utf-8")
+
+
+# --- Etapa 7: catálogo de posições ------------------------------------------
+@pytest.mark.parametrize("name", positions.names())
+def test_catalog_position_has_expected_outcome(name):
+    s = positions.load(name)
+    assert isinstance(s, ChessState)
+    assert get_outcome(s) == positions.POSITIONS[name].outcome
+
+
+@pytest.mark.parametrize("name", positions.names())
+def test_catalog_position_survives_serialization(name):
+    s = positions.load(name)
+    assert legal_actions(deserialize(serialize(s))) == legal_actions(s)
+
+
+@pytest.mark.parametrize("name, expected_claims", [
+    ("tripla_repeticao", [ClaimDraw()]),
+    ("tripla_repeticao_com_lance", [ClaimDraw(mv("f6g8"))]),
+    ("cinquenta_lances", [ClaimDraw()]),
+    ("cinquenta_lances_com_lance", [ClaimDraw(mv("g8f8")), ClaimDraw(mv("g8h8"))]),
+    ("inicial", []),
+    ("roques", []),
+])
+def test_catalog_claims(name, expected_claims):
+    assert claims(legal_actions(positions.load(name))) == expected_claims
+
+
+def test_catalog_mate_in_one():
+    s = next_state(positions.load("mate_em_1"), mv("a1a8"))
+    assert get_outcome(s) == Outcome(Result.WHITE_WINS, "checkmate")
+
+
+def test_catalog_unknown_position():
+    with pytest.raises(KeyError):
+        positions.load("nao_existe")
