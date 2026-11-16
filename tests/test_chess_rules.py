@@ -1,20 +1,24 @@
 """Testes do motor de xadrez (game/chess_rules.py)."""
 import dataclasses
+import io
+import json
 
 import chess
+import chess.pgn
 import pytest
 
 import game
-from game import (ChessState, ClaimDraw, Outcome, Result, from_moves,
-                  get_outcome, initial_state, is_terminal, legal_actions,
-                  next_state, utility)
+from game import (ChessState, ClaimDraw, Outcome, Result, deserialize,
+                  from_moves, get_outcome, initial_state, is_terminal,
+                  legal_actions, next_state, render, render_svg, serialize,
+                  to_pgn, utility)
 
 
 # --- Etapa 1: contrato da interface -----------------------------------------
 PUBLIC_API = [
     "initial_state", "from_moves", "legal_actions", "next_state",
-    "is_terminal", "get_outcome", "utility", "render",
-    "serialize", "deserialize",
+    "is_terminal", "get_outcome", "utility", "render", "render_svg",
+    "serialize", "deserialize", "to_pgn",
     "reset_transition_count", "transition_count",
 ]
 
@@ -439,3 +443,121 @@ def test_must_escape_check():
     assert ucis(s) == {"e1d2", "e1e2", "e1f2"}
     for uci in ucis(s):
         assert not next_state(s, mv(uci)).was_into_check()
+
+
+# --- Etapa 6: serialização e renderização -----------------------------------
+def test_render_initial_position():
+    text = render(initial_state())
+    lines = text.splitlines()
+    assert lines[0].strip() == "a b c d e f g h"
+    assert lines[1] == "8 ♜ ♞ ♝ ♛ ♚ ♝ ♞ ♜ 8"
+    assert lines[8] == "1 ♖ ♘ ♗ ♕ ♔ ♗ ♘ ♖ 1"
+    assert "Vez: brancas" in text and "Roque: KQkq" in text
+    assert "Último" not in text
+
+
+def test_render_ascii():
+    lines = render(from_moves(["e2e4"]), unicode=False).splitlines()
+    assert lines[1] == "8 r n b q k b n r 8"
+    assert lines[5] == "4 . . . . P . . . 4"
+    assert "Vez: pretas" in lines[-1] and "Último: e2e4" in lines[-1]
+
+
+def test_render_shows_en_passant_check_and_result():
+    assert "En passant: d6" in render(from_moves(["e2e4", "a7a6", "e4e5", "d7d5"]))
+    assert "XEQUE!" in render(from_moves(["e2e4", "f7f6", "d1h5"]))
+    assert "FIM: vitória das pretas (checkmate)" in render(from_moves(FOOLS_MATE))
+    claimed = next_state(from_moves((KNIGHT_SHUFFLE * 2)[:-1]), ClaimDraw(mv("f6g8")))
+    assert "FIM: empate (claimed_draw: claim:f6g8)" in render(claimed)
+
+
+def test_render_svg():
+    svg = render_svg(from_moves(FOOLS_MATE))
+    assert svg.startswith("<svg") and svg.rstrip().endswith("</svg>")
+    assert "check" in svg                     # destaque do rei em xeque
+
+
+SERIALIZE_CASES = {
+    "inicial": lambda: initial_state(),
+    "meio_jogo": lambda: from_moves(["e2e4", "c7c5", "g1f3", "d7d6"]),
+    "mate": lambda: from_moves(FOOLS_MATE),
+    "fen_inicial": lambda: from_moves(["e7e8n"], "8/4P3/8/8/8/8/k7/4K3 w - - 0 1"),
+    "reivindicado": lambda: next_state(from_moves((KNIGHT_SHUFFLE * 2)[:-1]),
+                                       ClaimDraw(mv("f6g8"))),
+}
+
+
+@pytest.mark.parametrize("name", SERIALIZE_CASES)
+def test_serialize_roundtrip(name):
+    s = SERIALIZE_CASES[name]()
+    data = json.loads(json.dumps(serialize(s)))      # passa por JSON de verdade
+    back = deserialize(data)
+    assert back.fen() == s.fen()
+    assert back.move_stack == s.move_stack
+    assert back.claimed_draw == s.claimed_draw
+    assert get_outcome(back) == get_outcome(s)
+    assert legal_actions(back) == legal_actions(s)
+
+
+def test_serialize_preserves_repetition_history():
+    s = from_moves(KNIGHT_SHUFFLE * 2)
+    back = deserialize(serialize(s))
+    assert ClaimDraw() in legal_actions(back)       # só funciona com o histórico
+
+
+def test_serialize_content():
+    data = serialize(from_moves(FOOLS_MATE))
+    assert data["start_fen"] == chess.STARTING_FEN
+    assert data["moves"] == FOOLS_MATE
+    assert data["result"] == "0-1" and data["reason"] == "checkmate"
+    assert data["claimed_draw"] is None
+
+
+@pytest.mark.parametrize("change", [
+    {"fen": "8/8/8/4k3/8/8/8/4K3 w - - 0 1"},     # FEN final não confere
+    {"moves": ["e2e4", "e2e4"]},                   # lance ilegal
+    {"claimed_draw": "claim"},                     # reivindicação inválida
+])
+def test_deserialize_rejects_inconsistent_data(change):
+    data = {**serialize(from_moves(["e2e4"])), **change}
+    with pytest.raises(ValueError):
+        deserialize(data)
+
+
+def test_claim_draw_from_uci():
+    assert ClaimDraw.from_uci("claim") == ClaimDraw()
+    assert ClaimDraw.from_uci("claim:e2e4") == ClaimDraw(mv("e2e4"))
+    with pytest.raises(ValueError):
+        ClaimDraw.from_uci("draw")
+
+
+def test_to_pgn_roundtrip():
+    pgn = to_pgn(from_moves(FOOLS_MATE), {"White": "A", "Black": "B"})
+    parsed = chess.pgn.read_game(io.StringIO(pgn))
+    assert parsed.headers["Result"] == "0-1"
+    assert parsed.headers["White"] == "A"
+    assert [m.uci() for m in parsed.mainline_moves()] == FOOLS_MATE
+
+
+def test_to_pgn_claimed_draw():
+    s = next_state(from_moves(KNIGHT_SHUFFLE * 2), ClaimDraw())
+    pgn = to_pgn(s)
+    assert "1/2-1/2" in pgn and "Empate reivindicado (claim)" in pgn
+
+
+def test_random_game_demo_reaches_the_end():
+    from game.__main__ import play_random_game
+    state, outcome = play_random_game(seed=2026)
+    assert is_terminal(state)
+    assert outcome.result is not Result.ONGOING
+
+
+def test_demo_cli(tmp_path, capsys):
+    from game.__main__ import main
+    svg, pgn = tmp_path / "f.svg", tmp_path / "p.pgn"
+    outcome = main(["--seed", "1", "--delay", "0", "--ascii",
+                    "--svg", str(svg), "--pgn", str(pgn)])
+    out = capsys.readouterr().out
+    assert f"Resultado: {outcome.result.value}" in out
+    assert svg.read_text(encoding="utf-8").startswith("<svg")
+    assert outcome.result.value in pgn.read_text(encoding="utf-8")

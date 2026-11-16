@@ -11,9 +11,11 @@ Contrato público:
     is_terminal(state)                   -> bool
     get_outcome(state)                   -> Outcome
     utility(state, player)               -> +1.0 / 0.0 / -1.0 (só em terminal)
-    render(state)                        -> str
-    serialize(state)                     -> dict
-    deserialize(data)                    -> chess.Board
+    render(state, unicode=True)          -> str   (tabuleiro em texto)
+    render_svg(state, size=400)          -> str   (imagem SVG)
+    serialize(state)                     -> dict  (compatível com JSON)
+    deserialize(data)                    -> ChessState
+    to_pgn(state)                        -> str
     reset_transition_count() / transition_count()
 
 Convenções:
@@ -35,12 +37,14 @@ from enum import Enum
 from typing import Iterable, Optional, Union
 
 import chess
+import chess.pgn
+import chess.svg
 
 __all__ = [
     "ClaimDraw", "Action", "Result", "Outcome", "ChessState",
     "initial_state", "from_moves", "legal_actions", "next_state",
-    "is_terminal", "get_outcome", "utility", "render",
-    "serialize", "deserialize",
+    "is_terminal", "get_outcome", "utility", "render", "render_svg",
+    "serialize", "deserialize", "to_pgn",
     "reset_transition_count", "transition_count",
 ]
 
@@ -58,6 +62,16 @@ class ClaimDraw:
 
     def uci(self) -> str:
         return "claim" if self.move is None else f"claim:{self.move.uci()}"
+
+    @classmethod
+    def from_uci(cls, text: str) -> "ClaimDraw":
+        """Inverso de uci(): "claim" ou "claim:<lance UCI>"."""
+        if text == "claim":
+            return cls()
+        prefix, sep, move = text.partition(":")
+        if prefix != "claim" or not sep:
+            raise ValueError(f"Reivindicação mal formada: {text!r}")
+        return cls(chess.Move.from_uci(move))
 
 
 Action = Union[chess.Move, ClaimDraw]
@@ -290,17 +304,105 @@ def utility(state: chess.Board, player: chess.Color) -> float:
 
 
 # --- Depuração e registro ---------------------------------------------------
-def render(state: chess.Board) -> str:
-    """Tabuleiro em texto, com vez, roque, en passant e contadores."""
-    raise NotImplementedError("Etapa 6")
+_RESULT_TEXT = {
+    Result.WHITE_WINS: "vitória das brancas",
+    Result.BLACK_WINS: "vitória das pretas",
+    Result.DRAW: "empate",
+}
+
+
+def render(state: chess.Board, unicode: bool = True) -> str:
+    """Tabuleiro em texto (brancas embaixo), com coordenadas e uma linha de
+    informações: vez, lance, roque, en passant, contador dos 50 lances,
+    último lance, xeque e resultado.
+
+    unicode=False usa letras (K, q, ...) para terminais sem UTF-8.
+    Obs.: em terminais de fundo escuro os símbolos Unicode das peças
+    brancas e pretas podem parecer trocados; as letras não têm esse problema.
+    """
+    empty = "·" if unicode else "."
+    lines = ["  a b c d e f g h"]
+    for rank in range(7, -1, -1):
+        cells = []
+        for file in range(8):
+            piece = state.piece_at(chess.square(file, rank))
+            if piece is None:
+                cells.append(empty)
+            else:
+                cells.append(piece.unicode_symbol() if unicode else piece.symbol())
+        lines.append(f"{rank + 1} {' '.join(cells)} {rank + 1}")
+    lines.append("  a b c d e f g h")
+
+    ep = (chess.square_name(state.ep_square)
+          if state.ep_square is not None and state.has_legal_en_passant() else "-")
+    info = [
+        f"Vez: {'brancas' if state.turn == chess.WHITE else 'pretas'}",
+        f"Lance {state.fullmove_number}",
+        f"Roque: {state.castling_xfen()}",
+        f"En passant: {ep}",
+        f"Meio-lances s/ captura ou peão: {state.halfmove_clock}",
+    ]
+    if state.move_stack:
+        info.append(f"Último: {state.peek().uci()}")
+    lines.append(" | ".join(info))
+
+    outcome = get_outcome(state)
+    if outcome.result is not Result.ONGOING:
+        claim = getattr(state, "claimed_draw", None)
+        detail = outcome.reason if claim is None else f"{outcome.reason}: {claim.uci()}"
+        lines.append(f"FIM: {_RESULT_TEXT[outcome.result]} ({detail})")
+    elif state.is_check():
+        lines.append("XEQUE!")
+    return "\n".join(lines)
+
+
+def render_svg(state: chess.Board, size: int = 400) -> str:
+    """Imagem SVG do tabuleiro: seta no último lance e rei em xeque em
+    vermelho. Abra o arquivo .svg no navegador ou no VS Code."""
+    lastmove = state.peek() if state.move_stack else None
+    check = state.king(state.turn) if state.is_check() else None
+    return chess.svg.board(state, size=size, lastmove=lastmove, check=check)
 
 
 def serialize(state: chess.Board) -> dict:
-    """Dicionário com FEN inicial, lances UCI, FEN atual, reivindicação e
-    resultado — suficiente para reconstruir o estado com o histórico."""
-    raise NotImplementedError("Etapa 6")
+    """Dicionário (compatível com JSON) com FEN inicial, lances UCI, FEN
+    atual, reivindicação e resultado — suficiente para reconstruir o estado
+    com todo o histórico (necessário para detectar repetições)."""
+    claim = getattr(state, "claimed_draw", None)
+    outcome = get_outcome(state)
+    return {
+        "start_fen": state.root().fen(),
+        "moves": [m.uci() for m in state.move_stack],
+        "fen": state.fen(),
+        "claimed_draw": None if claim is None else claim.uci(),
+        "result": outcome.result.value,
+        "reason": outcome.reason,
+    }
 
 
-def deserialize(data: dict) -> chess.Board:
-    """Inverso de serialize()."""
-    raise NotImplementedError("Etapa 6")
+def deserialize(data: dict) -> ChessState:
+    """Inverso de serialize(). Reaplica os lances a partir de `start_fen`.
+    ValueError se algum lance for ilegal, se a FEN final não bater com
+    `fen` (quando presente) ou se a reivindicação registrada for inválida."""
+    state = from_moves(data.get("moves", []), data.get("start_fen"))
+    if data.get("fen") is not None and state.fen() != data["fen"]:
+        raise ValueError(f"FEN final não confere: {state.fen()} != {data['fen']}")
+    if data.get("claimed_draw") is not None:
+        claim = ClaimDraw.from_uci(data["claimed_draw"])
+        if not _claim_is_valid(state, claim):
+            raise ValueError(f"Reivindicação inválida {claim.uci()} em {state.fen()}")
+        state.claimed_draw = claim
+    return state
+
+
+def to_pgn(state: chess.Board, headers: Optional[dict] = None) -> str:
+    """Partida em PGN, com o resultado do motor (inclui empate reivindicado,
+    registrado também como comentário no fim)."""
+    game_pgn = chess.pgn.Game.from_board(state)
+    game_pgn.headers["Result"] = get_outcome(state).result.value
+    for key, value in (headers or {}).items():
+        game_pgn.headers[key] = str(value)
+    claim = getattr(state, "claimed_draw", None)
+    if claim is not None:
+        game_pgn.end().comment = f"Empate reivindicado ({claim.uci()})"
+    return str(game_pgn)
