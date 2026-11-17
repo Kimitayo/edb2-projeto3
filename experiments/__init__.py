@@ -1,1 +1,1 @@
-# pacote de experimentos
+# pacote de experimentos (metricas, dados, runner, referencia e analise)
