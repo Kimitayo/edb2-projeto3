@@ -12,13 +12,16 @@ Rodadas separadas (secao 8.3):
 Exemplos:
   python -m experiments.runner decisions --set calibration --budget-type time
   python -m experiments.runner decisions --set test --budget-type time --agents minimax,gpn_mcts,hybrid \
-         --meu-table experiments/data/meu_table.json
+         --calibration-records experiments/results/calibration_records.csv
   python -m experiments.runner decisions --set test --budget-type time --kind memory
-  python -m experiments.runner games --meu-table experiments/data/meu_table.json
+  python -m experiments.runner games --calibration-records experiments/results/calibration_records.csv
 """
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import importlib
+import inspect
 import json
 import subprocess
 from dataclasses import dataclass
@@ -34,9 +37,10 @@ except ImportError:  # so para desenvolver ANTES de algorithms/base.py existir
     from dataclasses import dataclass as _dc
 
     @_dc(frozen=True)
-    class Budget:  # mesmo formato do plano
-        max_time_ms: int | None = None
+    class Budget:  # mesmo formato do algorithms/base.py atual
         max_transitions: int | None = None
+        max_time_s: float | None = None
+        max_depth: int | None = None
 
 SEEDS = (2026, 2027, 2028)
 SEEDED_AGENTS = ("gpn_mcts", "hybrid")
@@ -54,22 +58,74 @@ EXTRA_FIELDS = ("alpha_beta_prunes", "complete_depth", "iterations", "playouts",
                 "p_minimax", "p_gpn_mcts", "tree_nodes_created")
 
 
+# Nomes que os colegas usaram -> nomes das colunas do CSV
+EXTRA_ALIASES = {"pn_updates": "proof_updates", "pn_rank_sorts": "pnrank_sorts",
+                 "tree_nodes": "tree_nodes_created"}
+# Medidas que o agente relata sobre si mesmo. O runner mede de fora, e a medida DELE e a
+# valida; o que o agente relatou fica guardado em extra_json["agent_reported"].
+SELF_REPORTED = ("elapsed_ms", "cpu_ms", "peak_memory_kb", "budget_overrun", "status")
+
+
 # ----------------------------------------------------------------------------
-# Agentes: AJUSTAR os nomes das classes quando os modulos dos colegas existirem
+# Agentes (cada colega entregou de um jeito: funcao ou classe)
 # ----------------------------------------------------------------------------
-def make_factories(meu_table: str | None = None) -> dict:
-    """nome -> funcao(seed) que cria um agente NOVO (sem estado de decisoes anteriores)."""
+class FunctionAgent:
+    """Adapta uma funcao `choose_action(state, budget, *, seed=None, ...)` ao contrato de objeto.
+
+    So repassa os argumentos que a funcao realmente aceita (seed, table_path...).
+    """
+
+    def __init__(self, fn, **options):
+        self.fn = fn
+        params = inspect.signature(fn).parameters
+        takes_any = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+        self.kwargs = {k: v for k, v in options.items()
+                       if v is not None and (takes_any or k in params)}
+
+    def choose_action(self, state, budget):
+        return self.fn(state, budget, **self.kwargs)
+
+
+def _load_agent(module: str, class_names: tuple[str, ...], **options):
+    """Cria o agente de `module`.
+
+    Ordem: (1) a primeira classe de `class_names` que existir; (2) a unica classe do modulo
+    que tenha `choose_action`; (3) a funcao `choose_action` do modulo. So repassa os argumentos
+    que o construtor/funcao aceita (seed, ...).
+    """
+    mod = importlib.import_module(module)
+    cls = next((getattr(mod, n) for n in class_names if hasattr(mod, n)), None)
+    if cls is None:
+        own = [c for c in vars(mod).values()
+               if inspect.isclass(c) and c.__module__ == module and hasattr(c, "choose_action")]
+        cls = own[0] if len(own) == 1 else None
+    if cls is not None:
+        params = inspect.signature(cls).parameters
+        return cls(**{k: v for k, v in options.items() if v is not None and k in params})
+    return FunctionAgent(mod.choose_action, **options)
+
+
+def make_factories(calibration_records: str | None = None) -> dict:
+    """nome -> funcao(seed) que cria um agente NOVO (sem estado de decisoes anteriores).
+
+    GPN-MCTS (Gustavo): classe `GPNMCTSAgent(seed=...)` em algorithms/gpn_mcts.py.
+    Hibrida (Clara): `HybridAgent(minimax_agent, gpn_mcts_agent, probability_table)`; a tabela
+    sai de `load_calibration_csv(calibration_records.csv)`, arquivo gerado por experiments.analysis.
+    Minimax (Flavio): ainda nao entregue; tenta `MinimaxAgent`/`Minimax`/`AlphaBetaAgent`, a unica
+    classe com `choose_action` do modulo, ou uma funcao `choose_action`. Ajustar quando ele entregar.
+    """
     def minimax(seed):
-        from algorithms.minimax import Minimax
-        return Minimax()
+        return _load_agent("algorithms.minimax", ("MinimaxAgent", "Minimax", "AlphaBetaAgent"))
 
     def gpn_mcts(seed):
-        from algorithms.gpn_mcts import GPNMCTS
-        return GPNMCTS(seed=seed)
+        return _load_agent("algorithms.gpn_mcts", ("GPNMCTSAgent", "GPNMCTS"), seed=seed)
 
     def hybrid(seed):
-        from algorithms.hybrid import HybridMEU
-        return HybridMEU(table_path=meu_table, seed=seed)
+        from algorithms.hybrid import HybridAgent, load_calibration_csv
+        if not calibration_records:
+            raise SystemExit("A hibrida precisa de --calibration-records (CSV de calibracao).")
+        table = load_calibration_csv(calibration_records)
+        return HybridAgent(minimax(seed), gpn_mcts(seed), table)
 
     return {"minimax": minimax, "gpn_mcts": gpn_mcts, "hybrid": hybrid}
 
@@ -95,6 +151,7 @@ class Outcome:
     status: str
     error: str
     overrun: bool
+    transitions: int | None = None
 
 
 def _is_claim_draw(action) -> bool:
@@ -102,12 +159,29 @@ def _is_claim_draw(action) -> bool:
 
 
 def _is_legal(board, action) -> bool:
-    if _is_claim_draw(action):
-        return bool(board.can_claim_draw())
+    """A acao esta entre as acoes legais do MOTOR (inclui ClaimDraw)?"""
     try:
-        return action in board.legal_moves
+        from game import legal_actions
+    except ImportError:          # sem motor (testes com tabuleiro falso)
+        if _is_claim_draw(action):
+            return bool(board.can_claim_draw())
+        try:
+            return action in board.legal_moves
+        except Exception:
+            return False
+    try:
+        return action in legal_actions(board)
     except Exception:
         return False
+
+
+def _transition_counter():
+    """(reset, leitura) do contador global de transicoes do motor, ou (None, None)."""
+    try:
+        from game import reset_transition_count, transition_count
+        return reset_transition_count, transition_count
+    except ImportError:
+        return None, None
 
 
 def action_to_str(action) -> str:
@@ -120,12 +194,18 @@ def run_decision(agent, board, budget, track_memory: bool = False) -> Outcome:
     """Cronometra UMA decisao e confere o contrato (legalidade, estado intacto, orcamento)."""
     fen_before, stack_before = board.fen(), len(board.move_stack)
     decision, status, error = None, "ok", ""
+    reset_count, read_count = _transition_counter()
+    if reset_count:
+        reset_count()
     with measure(track_memory) as m:
         try:
             decision = agent.choose_action(board, budget)
         except Exception as e:  # falha do agente nunca vira empate
             status, error = "error", repr(e)
+    # O Decision atual (algorithms/base.py) nao tem `transitions`: usa o contador do motor.
     transitions = getattr(decision, "transitions", None)
+    if transitions is None and read_count:
+        transitions = read_count()
     if status == "ok":
         if board.fen() != fen_before or len(board.move_stack) != stack_before:
             status, error = "error", "o estado recebido foi modificado pelo agente"
@@ -134,7 +214,7 @@ def run_decision(agent, board, budget, track_memory: bool = False) -> Outcome:
         elif is_timeout(budget, m.elapsed_ms):
             status, error = "timeout", f"{m.elapsed_ms:.0f} ms passou do limite de timeout"
     overrun = budget_overrun(budget, m.elapsed_ms, transitions)
-    return Outcome(decision, m, status, error, overrun)
+    return Outcome(decision, m, status, error, overrun, transitions)
 
 
 def build_record(out: Outcome, *, experiment_id, run_id, run_kind, position_id, position_set,
@@ -143,6 +223,29 @@ def build_record(out: Outcome, *, experiment_id, run_id, run_kind, position_id, 
     btype, bvalue = budget_parts(budget)
     d = out.decision
     extra = dict(getattr(d, "extra", None) or {}) if d is not None else {}
+    # Hibrida (Clara): {"hybrid": {...}, "agent_extra": {...do algoritmo escolhido...}}
+    inner = extra.pop("agent_extra", None)
+    hyb = extra.pop("hybrid", None)
+    if isinstance(inner, dict):
+        for k, v in inner.items():
+            extra.setdefault(k, v)
+    if isinstance(hyb, dict):
+        probs = hyb.get("probabilities") or {}
+        extra["chosen_algorithm"] = hyb.get("selected_algorithm")
+        extra["context"] = hyb.get("context")
+        extra["selection_ms"] = hyb.get("selection_time_ms")
+        extra["p_minimax"] = probs.get("minimax")
+        extra["p_gpn_mcts"] = probs.get("gpn_mcts")
+        detail = {k: v for k, v in hyb.items()
+                  if k not in ("probabilities", "selected_algorithm", "context", "selection_time_ms")}
+        if detail:
+            extra["hybrid_details"] = detail
+    for old, new in EXTRA_ALIASES.items():
+        if old in extra and new not in extra:
+            extra[new] = extra.pop(old)
+    reported = {k: extra.pop(k) for k in SELF_REPORTED if k in extra}
+    if reported:
+        extra["agent_reported"] = reported
     take = {k: extra.pop(k, None) for k in EXTRA_FIELDS}
     hybrid_context = extra.pop("context", "") or ""
     tree_nodes = take.pop("tree_nodes_created")
@@ -157,7 +260,7 @@ def build_record(out: Outcome, *, experiment_id, run_id, run_kind, position_id, 
         nodes_visited=getattr(d, "nodes_visited", None),
         nodes_expanded=getattr(d, "nodes_expanded", None),
         tree_nodes_created=tree_nodes,
-        transitions=getattr(d, "transitions", None),
+        transitions=out.transitions,
         max_depth_reached=getattr(d, "max_depth_reached", None),
         elapsed_ms=out.measurement.elapsed_ms, cpu_ms=out.measurement.cpu_ms,
         peak_memory_kb=out.measurement.peak_memory_kb if run_kind == "memory" else None,
@@ -187,7 +290,11 @@ def _key(kind, pos_id, agent, seed, rep, btype, bvalue) -> tuple:
 
 
 def make_budget(budget_type: str, value: int) -> Budget:
-    return Budget(max_time_ms=value) if budget_type == "time" else Budget(max_transitions=value)
+    """Cria o Budget no formato que algorithms/base.py tiver (max_time_ms ou max_time_s)."""
+    if budget_type != "time":
+        return Budget(max_transitions=value)
+    names = {f.name for f in dataclasses.fields(Budget)}
+    return Budget(max_time_ms=value) if "max_time_ms" in names else Budget(max_time_s=value / 1000)
 
 
 def run_positions(positions, agent_names, budget_type, budget_values, *, table, experiment_id,
@@ -245,31 +352,30 @@ def _points(result: str, color: str) -> float | None:
 
 def play_game(white: str, black: str, budget, *, game_id, seeds, factories, decisions,
               experiment_id, commit, pgn_dir, max_plies=MAX_PLIES):
-    """Joga UMA partida a partir da posicao inicial padrao, sem livro de abertura."""
-    import chess
-    import chess.pgn
+    """Joga UMA partida a partir da posicao inicial padrao, sem livro de abertura.
 
-    board = chess.Board()
+    Usa o motor do grupo: next_state aplica lances e tambem ClaimDraw (empate reivindicado).
+    """
+    import chess
+    from game import get_outcome, initial_state, is_terminal, next_state, to_pgn
+
+    state = initial_state()
     seed_w, seed_b = seeds
     agents = {chess.WHITE: factories[white](seed_w), chess.BLACK: factories[black](seed_b)}
     names = {chess.WHITE: white, chess.BLACK: black}
     run_id = next_run_id(decisions.path)
     failures, status, termination, result = 0, "completed", "", "*"
-    while True:
-        outcome = board.outcome(claim_draw=False)       # mate, afogamento, posicao morta, 75 lances, 5 repeticoes
-        if outcome is not None:
-            result, termination = outcome.result(), outcome.termination.name.lower()
-            break
-        if len(board.move_stack) >= max_plies:
+    while not is_terminal(state):
+        if len(state.move_stack) >= max_plies:
             status, termination = "max_plies", "max_plies"
             break
-        color = board.turn
+        color = state.turn
         name = names[color]
         seed = seed_w if color == chess.WHITE else seed_b
-        out = run_decision(agents[color], board, budget)
+        out = run_decision(agents[color], state, budget)
         decisions.write(build_record(
             out, experiment_id=experiment_id, run_id=run_id, run_kind="game", position_id="",
-            position_set="game", context="", game_id=game_id, ply=len(board.move_stack),
+            position_set="game", context="", game_id=game_id, ply=len(state.move_stack),
             agent=name, seed=seed if name in SEEDED_AGENTS else None, repetition=0,
             budget=budget, commit=commit))
         run_id += 1
@@ -278,25 +384,23 @@ def play_game(white: str, black: str, budget, *, game_id, seeds, factories, deci
         if out.status in ("illegal_action", "error"):    # falha: a partida NAO vira empate
             status, termination = "failure", f"{out.status}:{name}"
             break
-        action = out.decision.action
-        if _is_claim_draw(action):
-            result, termination = "1/2-1/2", "claim_draw"
-            break
-        board.push(action)
+        state = next_state(state, out.decision.action)
+    if status == "completed":
+        outcome = get_outcome(state)
+        result, termination = outcome.result.value, outcome.reason or ""
 
-    game = chess.pgn.Game.from_board(board)
-    game.headers.update({"Event": "EDB2 - projeto xadrez", "White": white, "Black": black,
-                         "Result": result, "Round": game_id, "Termination": termination})
     pgn_path = Path(pgn_dir) / f"{game_id}.pgn"
     pgn_path.parent.mkdir(parents=True, exist_ok=True)
-    pgn_path.write_text(str(game) + "\n\n", encoding="utf-8")
+    headers = {"Event": "EDB2 - projeto xadrez", "White": white, "Black": black,
+               "Round": game_id, "Termination": termination}
+    pgn_path.write_text(to_pgn(state, headers) + "\n\n", encoding="utf-8")
     btype, bvalue = budget_parts(budget)
     return GameRecord(
         experiment_id=experiment_id, game_id=game_id, matchup=f"{white}_vs_{black}", white=white,
         black=black, seed_white=seed_w if white in SEEDED_AGENTS else None,
         seed_black=seed_b if black in SEEDED_AGENTS else None, budget_type=btype,
         budget_value=bvalue, result=result, status=status, termination=termination,
-        plies=len(board.move_stack), failures=failures,
+        plies=len(state.move_stack), failures=failures,
         points_white=_points(result, "white"), points_black=_points(result, "black"),
         pgn_path=str(pgn_path), git_commit=commit)
 
@@ -305,7 +409,7 @@ def run_games(*, games_table, decisions, factories, experiment_id, commit, pgn_d
               games_per_matchup=GAMES_PER_MATCHUP, budget_ms=GAME_BUDGET_MS, seeds=SEEDS,
               verbose=True) -> int:
     """12 partidas por confronto: 6 com cada agente de brancas, seeds 2026-2028 em rodizio."""
-    budget = Budget(max_time_ms=budget_ms)
+    budget = make_budget("time", budget_ms)
     done = {r["game_id"] for r in load_rows(games_table.path)}
     played = 0
     for a, b in MATCHUPS:
@@ -341,17 +445,18 @@ def main() -> None:
     d.add_argument("--agents", default="minimax,gpn_mcts")
     d.add_argument("--reps", type=int, default=DEFAULT_REPS)
     d.add_argument("--limit", type=int, default=None, help="usar so as N primeiras posicoes (teste rapido)")
-    d.add_argument("--meu-table", default=None)
+    d.add_argument("--calibration-records", default=None,
+                   help="CSV de calibracao em formato de registros (so a hibrida usa)")
     d.add_argument("--out", default="experiments/results")
 
     g = sub.add_parser("games", help="36 partidas completas")
-    g.add_argument("--meu-table", default=None)
+    g.add_argument("--calibration-records", default=None)
     g.add_argument("--out", default="experiments/results")
 
     a = ap.parse_args()
     out_dir = Path(a.out)
     commit = git_commit()
-    factories = make_factories(a.meu_table)
+    factories = make_factories(a.calibration_records)
 
     if a.cmd == "decisions":
         from experiments.dataset import load_positions

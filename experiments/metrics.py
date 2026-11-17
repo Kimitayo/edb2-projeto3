@@ -65,13 +65,19 @@ def measure(track_memory: bool = False):
 
 
 def budget_parts(budget) -> tuple[str, float]:
-    """('time', 300.0) ou ('transitions', 2000.0). Um tipo de limite por vez."""
+    """('time', 300.0) ou ('transitions', 2000.0). Um tipo de limite por vez.
+
+    Aceita os dois nomes de campo de tempo: `max_time_ms` (plano, secao 12.2) e
+    `max_time_s` (algorithms/base.py atual, em segundos). O valor sai SEMPRE em ms.
+    """
     max_time = getattr(budget, "max_time_ms", None)
+    if max_time is None and getattr(budget, "max_time_s", None) is not None:
+        max_time = budget.max_time_s * 1000.0
     max_trans = getattr(budget, "max_transitions", None)
     if (max_time is None) == (max_trans is None):
-        raise ValueError("Budget deve ter exatamente UM limite: max_time_ms ou max_transitions")
+        raise ValueError("Budget deve ter exatamente UM limite: tempo ou max_transitions")
     if max_time is not None:
-        return "time", float(max_time)
+        return "time", float(round(max_time, 6))
     return "transitions", float(max_trans)
 
 

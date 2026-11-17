@@ -81,8 +81,18 @@ def position_key(board) -> str:
 
 
 def is_excluded(board) -> bool:
-    """Exclusoes do plano: terminal ou com reivindicacao de empate disponivel."""
-    return board.is_game_over() or board.can_claim_draw()
+    """Exclusoes do plano: terminal ou com reivindicacao de empate disponivel.
+
+    Usa o MESMO criterio do motor (game.legal_actions): se existe qualquer ClaimDraw
+    entre as acoes (inclusive com lance pretendido), a posicao e excluida.
+    """
+    try:
+        from game import legal_actions, is_terminal
+    except ImportError:  # motor ainda nao disponivel: aproximacao com python-chess
+        return board.is_game_over() or board.can_claim_draw()
+    if is_terminal(board):
+        return True
+    return any(type(a).__name__ == "ClaimDraw" for a in legal_actions(board))
 
 
 # ----------------------------------------------------------------------------
@@ -217,11 +227,16 @@ class Position:
 
     def to_board(self):
         """Reconstroi o tabuleiro COM historico (o plano proibe usar so a FEN)."""
-        import chess
-        board = chess.Board()
-        for uci in self.moves_uci.split():
-            board.push_uci(uci)
-        return board
+        moves = self.moves_uci.split()
+        try:
+            from game import from_moves     # motor do grupo: ChessState com historico
+            return from_moves(moves)
+        except ImportError:
+            import chess
+            board = chess.Board()
+            for uci in moves:
+                board.push_uci(uci)
+            return board
 
 
 def write_positions(selected: list[dict], path: Path) -> None:
