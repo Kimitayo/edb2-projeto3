@@ -29,8 +29,9 @@ Ordem de execução (plano, seção 14):
 1. `dataset build` → 120 posições (60 calibração, 60 teste).
 2. `runner decisions --set calibration` com **Minimax e GPN-MCTS** (a híbrida ainda não existe).
 3. `reference evaluate` → qualidade da calibração.
-4. `analysis` → `calibration_table.csv` → **entregar à Clara**.
-5. Clara gera a tabela MEU; então `runner decisions --set test` com os três agentes.
+4. `analysis` → `calibration_records.csv` → **entregar à Clara** (é o arquivo que o `load_calibration_csv` dela lê).
+5. A híbrida lê o `calibration_records.csv`; então `runner decisions --set test ... --calibration-records experiments/results/calibration_records.csv` com os três agentes.
+   **A calibração precisa cobrir os 6 orçamentos** × 6 contextos × 2 algoritmos: a híbrida dá erro se faltar qualquer combinação.
 6. `reference evaluate` e `analysis` de novo; depois a rodada de **memória** e as **36 partidas**.
 
 ## 2. Posições (`experiments/dataset.py`)
@@ -79,16 +80,18 @@ Falhas são registradas como falhas, **nunca como empate**. Se um agente falha n
 
 Regras: cabeçalho fixo, gravação imediata, o experimento pode ser **interrompido e retomado** (combinações já gravadas são puladas), cada linha leva o `git_commit` (com `-dirty` se havia alteração não commitada). Arquivos brutos não são editados à mão.
 
-Chaves esperadas em `Decision.extra` (combinar com Flavio, Gustavo e Clara):
+Chaves esperadas em `Decision.extra` (conferidas com o código real do Gustavo e da Clara; falta o Flavio entregar o Minimax):
 
 | Agente | Chaves |
 |---|---|
 | Todos | `tree_nodes_created` |
 | Minimax | `alpha_beta_prunes`, `complete_depth` |
-| GPN-MCTS | `iterations`, `playouts`, `playout_steps`, `proof_updates`, `pnrank_sorts` |
-| Híbrida | `chosen_algorithm` (`"minimax"` ou `"gpn_mcts"`), `context`, `selection_ms`, `p_minimax`, `p_gpn_mcts` |
+| GPN-MCTS (`GPNMCTSAgent`) | `iterations`, `playouts`, `playout_steps`, `tree_nodes` (vira `tree_nodes_created`). As colunas `proof_updates` e `pnrank_sorts` ficam vazias enquanto o agente não contar essas operações. `root_pn`, `root_visits`, `root_solved`, `time_s`, `fallback`, `formula` e `cpn` vão para `extra_json` |
+| Híbrida (Clara) | `extra = {"hybrid": {...}, "agent_extra": {...}}`. O runner lê `hybrid.selected_algorithm`, `hybrid.context`, `hybrid.selection_time_ms`, `hybrid.probabilities` e junta o `agent_extra` (métricas do algoritmo escolhido) às colunas. O resto de `hybrid` vai para `extra_json` |
 
-Qualquer outra chave vai para a coluna `extra_json`.
+Qualquer outra chave vai para a coluna `extra_json`. Se o agente relatar `elapsed_ms`, `cpu_ms`, `peak_memory_kb`, `budget_overrun` ou `status`, esses valores ficam em `extra_json` dentro de `agent_reported`: **valem sempre as medidas do runner**, que cronometra de fora.
+
+Forma de entrega aceita pelo runner: classe (`GPNMCTSAgent(seed=...)`; para o Minimax tenta `MinimaxAgent`, `Minimax` ou `AlphaBetaAgent`, ou a única classe do módulo com `choose_action`; a híbrida é `HybridAgent(minimax, gpn_mcts, tabela)`) **ou** função `choose_action(state, budget, *, seed=None, ...)` no módulo do algoritmo. A seed é passada em cada chamada (2026, 2027, 2028) por quem roda os experimentos.
 
 ## 6. Qualidade (`experiments/reference.py`)
 
@@ -99,9 +102,11 @@ Qualquer outra chave vai para a coluna `extra_json`.
 - **Mates** ficam fora da média em centipeões e são classificados à parte (`mate_kept`, `mate_missed`, `mate_blunder`, `lost_both`).
 - O Stockfish roda **depois** dos experimentos, nunca junto (senão atrapalha as medidas de tempo).
 
-## 7. Tabela de calibração para a Clara
+## 7. Calibração para a Clara
 
-`calibration_table.csv`, por algoritmo × contexto × orçamento:
+`calibration_records.csv` (usado pela híbrida): uma linha por decisão, com `scenario_id, context, budget, algorithm, correct`. O `budget` usa os identificadores da híbrida (`100ms`, `300ms`, `1000ms`, `500_transitions`, `2000_transitions`, `5000_transitions`). A própria `load_calibration_csv` agrega por posição e aplica a suavização de Laplace.
+
+`calibration_table.csv` traz a mesma informação em contagens, só para conferência, por algoritmo × contexto × orçamento:
 
 - `tentativas` = número de posições de calibração do contexto;
 - `acertos` = soma, sobre as posições, da **proporção** de acertos da posição.
@@ -132,7 +137,18 @@ A **política fixa** de referência é derivada em `analysis.derive_fixed_policy
 
 Também gera `empirical_summary.csv`, com a ramificação efetiva aproximada do Minimax (`nós^(1/profundidade completa)`). Ela serve para observar tendências, não para afirmar uma complexidade exata.
 
-## 10. Pontos do plano que ficaram em aberto e como foram resolvidos aqui
+## 10. Divergência entre o plano e o código atual (decidir no grupo)
+
+`algorithms/base.py` (branch da Clara) difere da seção 12.2 do plano:
+
+| Plano 12.2 | `base.py` atual | O que o runner faz |
+|---|---|---|
+| `Budget.max_time_ms` | `Budget.max_time_s` (segundos) | aceita os dois; grava sempre em ms |
+| `Decision.transitions` | não existe | usa `game.transition_count()` (zerado antes de cada decisão) |
+
+Quando o grupo escolher um dos dois, nada precisa mudar nos experimentos.
+
+## 10b. Pontos do plano que ficaram em aberto e como foram resolvidos aqui
 
 Estes itens **não** estavam definidos no plano. Foram escolhidos para o código funcionar e precisam ser conhecidos pelo grupo.
 

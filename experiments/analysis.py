@@ -3,7 +3,8 @@ analysis.py - Tabelas e graficos do artigo (Plano v2.0, secoes 10.3, 11.6 e 13).
 
 Entradas (experiments/results/): decisions.csv, quality.csv, games.csv
 Saidas:
-  results/calibration_table.csv  -> entregar para a Clara (hibrida)
+  results/calibration_records.csv -> ENTREGAR A CLARA (formato do load_calibration_csv dela)
+  results/calibration_table.csv  -> mesma calibracao em contagens (conferencia)
   results/empirical_summary.csv  -> analise empirica de complexidade
   plots/01..08_*.png             -> os 8 graficos obrigatorios
 
@@ -77,6 +78,31 @@ def calibration_table(pp: pd.DataFrame) -> pd.DataFrame:
     t = cal.groupby(["agent", "context", "budget_type", "budget_value"], as_index=False).agg(
         tentativas=("top1", "size"), acertos=("top1", "sum"))
     return t.sort_values(["budget_type", "budget_value", "context", "agent"]).reset_index(drop=True)
+
+
+def budget_key(budget_type: str, value: float) -> str:
+    """Identificador de orcamento usado pela hibrida: '300ms' ou '2000_transitions'."""
+    return f"{int(round(value))}ms" if budget_type == "time" else f"{int(round(value))}_transitions"
+
+
+def calibration_records(mq: pd.DataFrame) -> pd.DataFrame:
+    """Registros de calibracao no formato que `algorithms.hybrid.load_calibration_csv` le.
+
+    Uma linha por DECISAO (cada seed e cada repeticao); a hibrida agrega por posicao.
+    Colunas: scenario_id, context, budget, algorithm, correct (1 = top-1 com o Stockfish).
+    """
+    cols = ["scenario_id", "context", "budget", "algorithm", "correct"]
+    if mq.empty:
+        return pd.DataFrame(columns=cols)
+    c = mq[(mq.position_set == "calibration") & mq.agent.isin(["minimax", "gpn_mcts"])]
+    out = pd.DataFrame({
+        "scenario_id": c.position_id,
+        "context": c.context,
+        "budget": [budget_key(t, v) for t, v in zip(c.budget_type, c.budget_value)],
+        "algorithm": c.agent,
+        "correct": c.top1.astype(int),
+    })
+    return out.sort_values(["budget", "context", "algorithm", "scenario_id"]).reset_index(drop=True)
 
 
 def derive_fixed_policy(pp: pd.DataFrame) -> pd.DataFrame:
@@ -308,8 +334,10 @@ def plot_games(games, plots_dir):
 def run_all(results_dir="experiments/results", plots_dir="experiments/plots") -> None:
     results_dir, plots_dir = Path(results_dir), Path(plots_dir)
     dec, qual, games = load_all(results_dir)
-    pp = per_position(merged_quality(dec, qual))
+    mq = merged_quality(dec, qual)
+    pp = per_position(mq)
     if not pp.empty:
+        calibration_records(mq).to_csv(results_dir / "calibration_records.csv", index=False)
         calibration_table(pp).to_csv(results_dir / "calibration_table.csv", index=False)
         fixed = derive_fixed_policy(pp)
         pp = pd.concat([pp, fixed], ignore_index=True) if not fixed.empty else pp

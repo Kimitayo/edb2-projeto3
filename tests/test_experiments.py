@@ -18,7 +18,8 @@ from experiments.metrics import budget_overrun, budget_parts, is_timeout, measur
 from experiments.reference import Score, compute_regret
 from experiments.results_storage import (DecisionRecord, GameRecord, QualityRecord, decision_table,
                                          game_table, load_rows, next_run_id, quality_table)
-from experiments.runner import Budget, run_decision, run_positions
+from experiments.runner import (FunctionAgent, build_record, make_budget, run_decision,
+                                run_positions)
 
 
 # ----------------------------------------------------------------------------
@@ -97,17 +98,26 @@ def factories():
 # metrics
 # ----------------------------------------------------------------------------
 def test_budget_helpers():
-    t, c = Budget(max_time_ms=100), Budget(max_transitions=500)
+    t, c = make_budget("time", 100), make_budget("transitions", 500)
     assert budget_parts(t) == ("time", 100.0)
     assert budget_parts(c) == ("transitions", 500.0)
     assert budget_overrun(t, 120, 10) and not budget_overrun(t, 90, 10)
     assert budget_overrun(c, 1, 501) and not budget_overrun(c, 1, 500)
     assert is_timeout(t, 201) and not is_timeout(t, 150) and not is_timeout(c, 10 ** 6)
     try:
-        budget_parts(Budget(max_time_ms=1, max_transitions=1))
+        budget_parts(type("B", (), {"max_time_ms": 1, "max_transitions": 1})())
         raise AssertionError("deveria exigir UM limite")
     except ValueError:
         pass
+
+
+def test_budget_in_seconds_and_ms():
+    """Contrato atual (algorithms/base.py): max_time_s em segundos. Plano: max_time_ms."""
+    class S:
+        max_time_s, max_transitions = 0.3, None
+    class M:
+        max_time_ms, max_transitions = 300, None
+    assert budget_parts(S()) == ("time", 300.0) == budget_parts(M())
 
 
 def test_measure_time_and_memory():
@@ -123,7 +133,7 @@ def test_measure_time_and_memory():
 # run_decision: o contrato e conferido de fora
 # ----------------------------------------------------------------------------
 def test_run_decision_statuses():
-    b = Budget(max_time_ms=10)
+    b = make_budget("time", 10)
     assert run_decision(FakeAgent(), FakeBoard(), b).status == "ok"
     assert run_decision(FakeAgent("illegal"), FakeBoard(), b).status == "illegal_action"
     o = run_decision(FakeAgent("error"), FakeBoard(), b)
@@ -134,6 +144,128 @@ def test_run_decision_statuses():
     assert o.status == "timeout" and o.overrun
     o = run_decision(FakeAgent(sleep=0.015), FakeBoard(), b)
     assert o.status == "ok" and o.overrun          # estourou, mas nao passou do dobro
+
+
+def test_function_style_agent_and_key_aliases():
+    """Estilo do Gustavo: funcao choose_action(state, budget, *, seed=None), chaves pn_*."""
+    calls = []
+
+    def choose_action(state, budget, *, seed=None, **kwargs):
+        calls.append(seed)
+        return FakeDecision(FakeMove("e2e4"), extra={
+            "iterations": 9, "pn_updates": 4, "pn_rank_sorts": 2, "tree_nodes_created": 7,
+            "root_pn": 1, "seed": seed, "elapsed_ms": 123.0, "status": "ok"})
+
+    def sem_seed(state, budget):          # Minimax pode nao ter seed: nao deve receber
+        return FakeDecision(FakeMove("d2d4"))
+
+    assert FunctionAgent(sem_seed, seed=2026).choose_action(FakeBoard(), None).action.u == "d2d4"
+    fac = {"minimax": lambda s: FakeAgent(), "gpn_mcts": lambda s: FunctionAgent(choose_action, seed=s),
+           "hybrid": lambda s: FakeAgent()}
+    with tempfile.TemporaryDirectory() as d:
+        p = Path(d) / "decisions.csv"
+        with decision_table(p) as t:
+            run_positions(_positions()[:1], ["gpn_mcts"], "time", (100,), table=t,
+                          experiment_id="x", reps=1, factories=fac, commit="abc", verbose=False)
+        rows = load_rows(p)
+    assert sorted(calls) == [2026, 2027, 2028]
+    r = rows[0]
+    assert r["proof_updates"] == "4" and r["pnrank_sorts"] == "2" and r["tree_nodes_created"] == "7"
+    assert float(r["elapsed_ms"]) < 100                      # vale a medida do runner, nao a do agente
+    assert "agent_reported" in r["extra_json"] and "root_pn" in r["extra_json"]
+
+
+def test_load_agent_finds_class_or_function():
+    """Entrega do Gustavo: class GPNMCTSAgent(Agent) com seed no construtor."""
+    import types
+    from experiments.runner import _load_agent
+
+    class GPNMCTSAgent:
+        def __init__(self, seed=0, c=1.4):
+            self.seed = seed
+
+        def choose_action(self, state, budget):
+            return None
+
+    class Outra:                      # classe sem choose_action nao conta
+        pass
+
+    mod = types.ModuleType("fake_algos_a")
+    GPNMCTSAgent.__module__ = Outra.__module__ = "fake_algos_a"
+    mod.GPNMCTSAgent, mod.Outra = GPNMCTSAgent, Outra
+    sys.modules["fake_algos_a"] = mod
+    try:
+        a = _load_agent("fake_algos_a", ("GPNMCTS", "GPNMCTSAgent"), seed=2027)     # por nome
+        assert isinstance(a, GPNMCTSAgent) and a.seed == 2027
+        mod2 = types.ModuleType("fake_algos_b")                                        # unica classe
+        class MeuMinimax:
+            def choose_action(self, state, budget):
+                return None
+        MeuMinimax.__module__ = "fake_algos_b"
+        mod2.MeuMinimax = MeuMinimax
+        sys.modules["fake_algos_b"] = mod2
+        assert isinstance(_load_agent("fake_algos_b", ("MinimaxAgent",), seed=1), MeuMinimax)
+    finally:
+        sys.modules.pop("fake_algos_a", None)
+        sys.modules.pop("fake_algos_b", None)
+
+
+def test_gustavo_extra_keys():
+    """O GPNMCTSAgent real devolve extra com tree_nodes, transitions, time_s, root_pn..."""
+    def gpn(state, budget, seed=None):
+        return FakeDecision(FakeMove("e2e4"), extra={
+            "algorithm": "gpn-mcts", "iterations": 30, "playouts": 30, "playout_steps": 900,
+            "transitions": 777, "tree_nodes": 21, "root_visits": 30, "root_pn": 1.0,
+            "root_solved": False, "time_s": 0.3, "fallback": False})
+    out = run_decision(FunctionAgent(gpn, seed=2026), FakeBoard(), make_budget("time", 1000))
+    rec = build_record(out, experiment_id="e", run_id=1, run_kind="time", position_id="p",
+                       position_set="test", context="C3", game_id="", ply=None, agent="gpn_mcts",
+                       seed=2026, repetition=0, budget=make_budget("time", 1000), commit="abc")
+    assert rec.tree_nodes_created == 21 and rec.iterations == 30 and rec.playout_steps == 900
+    assert rec.transitions == 20                 # vale o contador do motor/Decision, nao o do extra
+    assert "root_pn" in rec.extra_json and "time_s" in rec.extra_json
+
+
+def test_hybrid_nested_extra_and_engine_transition_counter():
+    """Hibrida da Clara: extra={"hybrid":{...}, "agent_extra":{...}}; transicoes vem do motor."""
+    import types
+
+    counter = {"n": 0}
+    fake_game = types.ModuleType("game")
+    fake_game.legal_actions = lambda board: tuple(board.legal_moves)
+    fake_game.reset_transition_count = lambda: counter.update(n=0)
+    fake_game.transition_count = lambda: counter["n"]
+
+    @dataclass
+    class DecisionSemTransitions:          # como o Decision atual do algorithms/base.py
+        action: object
+        nodes_expanded: int = 3
+        nodes_visited: int = 8
+        max_depth_reached: int = 2
+        extra: dict = field(default_factory=dict)
+
+    class Hybrid:
+        def choose_action(self, board, budget):
+            counter["n"] += 37                 # o agente chamou next_state 37 vezes
+            return DecisionSemTransitions(FakeMove("e2e4"), extra={
+                "hybrid": {"context": "C4", "selected_algorithm": "gpn_mcts",
+                           "selection_time_ms": 0.4, "probabilities": {"minimax": .4, "gpn_mcts": .7},
+                           "features": {"phase": "middlegame"}},
+                "agent_extra": {"iterations": 12, "pn_updates": 5}})
+
+    sys.modules["game"] = fake_game
+    try:
+        out = run_decision(Hybrid(), FakeBoard(), make_budget("transitions", 500))
+    finally:
+        del sys.modules["game"]
+    assert out.status == "ok" and out.transitions == 37 and not out.overrun
+    rec = build_record(out, experiment_id="e", run_id=1, run_kind="time", position_id="tes_C4_01",
+                       position_set="test", context="C4", game_id="", ply=None, agent="hybrid",
+                       seed=2026, repetition=0, budget=make_budget("transitions", 500), commit="abc")
+    assert rec.transitions == 37 and rec.chosen_algorithm == "gpn_mcts" and rec.hybrid_context == "C4"
+    assert rec.p_minimax == .4 and rec.p_gpn_mcts == .7 and abs(rec.selection_ms - .4) < 1e-9
+    assert rec.iterations == 12 and rec.proof_updates == 5     # veio de agent_extra, com alias
+    assert "hybrid_details" in rec.extra_json
 
 
 # ----------------------------------------------------------------------------
@@ -305,12 +437,35 @@ def test_analysis_pipeline_smoke():
         names = {p.name for p in plots.iterdir()}
         for prefix in ("01_", "02_", "03_", "04_", "05_", "06_", "07_", "08_"):
             assert any(n.startswith(prefix) for n in names), f"faltou o grafico {prefix}"
+        rec = load_rows(res / "calibration_records.csv")           # formato lido pela hibrida da Clara
+        assert rec and list(rec[0].keys()) == ["scenario_id", "context", "budget", "algorithm", "correct"]
+        assert {r["budget"] for r in rec} <= {"100ms", "300ms", "1000ms", "500_transitions",
+                                              "2000_transitions", "5000_transitions"}
+        assert {r["correct"] for r in rec} <= {"0", "1"} and {r["algorithm"] for r in rec} <= {"minimax", "gpn_mcts"}
         cal = load_rows(res / "calibration_table.csv")
         assert cal and {"agent", "context", "tentativas", "acertos"} <= set(cal[0])
         assert {r["agent"] for r in cal} == {"minimax", "gpn_mcts"}           # hibrida nao calibra
         assert (res / "empirical_summary.csv").exists()
         fixed = [r for r in load_rows(res / "quality_per_position.csv") if r["agent"] == "fixed_policy"]
         assert fixed, "politica fixa nao foi derivada"
+
+
+def test_contexts_match_game_features():
+    """Os contextos do dataset.py devem ser IDENTICOS aos de game/features.py (Clara).
+    So roda onde python-chess e o motor existem; senao e ignorado."""
+    try:
+        import chess  # noqa: F401
+        from game import from_moves
+        from game.features import classify_context
+        from game.positions import names, load
+    except ImportError:
+        print("     (ignorado: python-chess/motor nao disponiveis)")
+        return
+    from experiments.dataset import context_of
+    for name in names():
+        state = load(name)
+        if not state.is_game_over():
+            assert context_of(state)[2] == classify_context(state), name
 
 
 if __name__ == "__main__":
