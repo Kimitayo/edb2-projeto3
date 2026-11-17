@@ -1,6 +1,3 @@
-pandas
-matplotlib
-numpy
-zstandard
 python-chess==1.999
 pytest>=7
+
