@@ -1,289 +1,248 @@
-"""GPN-MCTS (Generalized Proof-Number MCTS) com viés PNRank, sobre python-chess.
+"""GPN-MCTS: MCTS com viés de números de prova por jogador (UCT-PN).
 
-Referência: Kowalski, Soemers, Kosakowski, Winands. "Generalized Proof-Number
-Monte-Carlo Tree Search", ECAI 2025 (arXiv:2506.13249). Seções 2.3, 3.1, 3.2 e
-Algoritmo 1 (seção 3.5).
-
-Mecanismos do artigo PRESERVADOS aqui:
-  1. Proof numbers POR JOGADOR em cada nó (sem disproof numbers). Para o
-     jogador p, um nó em que p move é OR (pn = mínimo dos filhos) e um nó em
-     que o outro move é AND (pn = soma dos filhos). Folha desconhecida: pn=1;
-     vitória de p: pn=0; derrota OU empate de p: pn=infinito.
-  2. Seleção UCT-PN (fórmula 2):  v_i + C*sqrt(ln n_pai / n_i) + Cpn*PNRank(i)
-     onde o viés usa os proof numbers do jogador que move no nó pai.
-  3. PNRank (fórmula 3): 1 - rank(i)/max_rank, empates com o mesmo rank.
-  4. Retropropagação dos proof numbers com parada antecipada quando nada muda
-     e flag needRecalc (cálculo do viés sob demanda, seção 3.2.5).
-  5. Recompensas +1/0/-1 e C = sqrt(2), como nos experimentos do artigo.
-  6. Lance final: filho da raiz mais visitado.
-
-SIMPLIFICAÇÕES / INTERPRETAÇÕES (devem ser registradas no artigo):
-  - NÃO há Score Bounded MCTS (seção 3.4). O artigo avalia versões com e sem
-    ele; esta é a versão sem.
-  - NÃO há mobility initialization (seção 3.3) nem reaproveitamento de árvore.
-  - Só PNRank; PNMax e PNSum (seções 3.2.2 e 3.2.3) não foram implementados.
-  - O artigo não define o desempate de ranks. Usamos ranking denso
-    (valores iguais -> mesmo rank; próximo valor -> rank seguinte).
-  - Alg. 1 percorre apenas os filhos já criados ao calcular min/soma; foi
-    seguido ao pé da letra (nós parcialmente expandidos usam só os filhos
-    existentes).
-  - A flag needRecalc é ligada no PAI do nó cujo proof number mudou (é o pai
-    que precisa recalcular o viés dos filhos); o recálculo é feito só quando
-    o nó vai de fato escolher entre filhos. A ordem exata no Alg. 1 estava
-    ambígua na versão lida.
-  - Desempate na seleção: primeiro filho (determinístico), não aleatório.
-  - Playout aleatório com limite de plies; ao atingir o limite sem fim de
-    jogo, o resultado é empate (mesma regra do UCT em mcts.py).
-  - Parâmetros padrão (cpn=1.0, playout de 80 meios-lances) vêm do documento do
-    grupo (seção 7), NÃO do artigo: o artigo mostra que o melhor Cpn varia muito
-    por jogo, então o grupo não deve afirmar que 1.0 é ótimo para xadrez.
-  - Escolha final: mais visitas; empate decidido pelo UCI (documento do grupo).
-  - Score-Bounded MCTS OMITIDO por decisão do integrante 3: o documento do grupo
-    o prevê habilitado, mas o artigo não detalha como os limites alimentam os
-    proof numbers (seção 3.4 só o descreve como técnica auxiliar). Declarar como
-    simplificação/diferença em relação à configuração do grupo.
-  - PENDENTE: heurística H no corte do playout (definição e escala vêm do
-    grupo). Hoje o corte vale empate (0).
-  - Dois jogadores apenas (xadrez).
+Responsável: Gustavo (Integrante 3).
+Baseado em Kowalski et al., arXiv:2506.13249 (Seções 3.1 a 3.5).
+Reutiliza Clock, playout, SearchStats e DEFAULT_C de algorithms/mcts.py.
+Pendências desta etapa: Score-Bounded, otimização needRecalc e mobility init.
 """
-
 from __future__ import annotations
 
 import math
 import random
-import time
-import tracemalloc
-from dataclasses import dataclass, field
-from typing import Optional, Sequence
 
 import chess
 
-from .mcts import SearchResult, _playout_with_steps, _result_white_pov
+from algorithms.base import Agent, Budget, Decision
+from algorithms.mcts import (DEFAULT_C, PLAYOUT_LIMIT, BudgetExhausted, Clock,
+                             SearchStats, playout)
+from game import Action, get_outcome, is_terminal, legal_actions, next_state
 
 INF = math.inf
+PLAYERS = (chess.WHITE, chess.BLACK)
+DEFAULT_CPN = 1.0
+FORMULAS = ("max", "sum", "rank")  # PNMax (padrão), PNSum e PNRank
+_EPS = 1e-12
 
 
-class GPNNode:
-    """Nó da árvore GPN-MCTS.
-
-    value_sum acumula a recompensa (+1/0/-1) do ponto de vista de quem FEZ o
-    lance que levou ao nó (player_just_moved), como no UCT de mcts.py.
-    pn[int(p)] é o proof number do jogador p (índice 1 = brancas, 0 = pretas).
-    """
-
-    __slots__ = ("parent", "move", "player_to_move", "player_just_moved",
-                 "terminal", "winner", "children", "untried", "visits",
-                 "value_sum", "pn", "bias", "need_recalc")
-
-    def __init__(self, board: chess.Board, parent: Optional["GPNNode"] = None,
-                 move: Optional[chess.Move] = None):
-        self.parent = parent
-        self.move = move
-        self.player_to_move = board.turn
-        self.player_just_moved = not board.turn
-        self.terminal = board.is_game_over()
-        self.winner: Optional[bool] = None  # None = sem vencedor (ou não terminal)
-        if self.terminal:
-            outcome = board.outcome()
-            self.winner = None if outcome is None else outcome.winner
-        self.untried: list[chess.Move] = [] if self.terminal else list(board.legal_moves)
-        self.children: list[GPNNode] = []
-        self.visits = 0
-        self.value_sum = 0.0
-        self.pn = [1.0, 1.0]
-        self.bias = 0.0            # viés PNRank deste nó, visto do pai
-        self.need_recalc = False
+# --- Números de prova por jogador ---------------------------------------------
+def _leaf_pn(state: chess.Board) -> dict[bool, float]:
+    """Valores de folha. Terminal: 0 para o vencedor, INF para os demais (empate
+    deixa INF para ambos). Não terminal (desconhecido): 1 para ambos."""
+    if is_terminal(state):
+        winner = get_outcome(state).winner
+        return {p: (0.0 if winner == p else INF) for p in PLAYERS}
+    return {p: 1.0 for p in PLAYERS}
 
 
-def update_proof_number(node: GPNNode, p: bool) -> bool:
-    """UPDATEPROOFNUMBER do Alg. 1. Devolve True se o valor mudou."""
-    i = int(p)
-    if not node.children:  # folha da árvore
-        if not node.terminal:
-            node.pn[i] = 1.0
-        elif node.winner == p:
-            node.pn[i] = 0.0
-        else:  # derrota ou empate de p
-            node.pn[i] = INF
-        return True
-    old = node.pn[i]
-    if p == node.player_to_move:  # nó OR para p
-        new = min(ch.pn[i] for ch in node.children)
-    else:                         # nó AND para p
-        new = sum(ch.pn[i] for ch in node.children)
-    node.pn[i] = new
-    return new != old
+def _update_pn(node: "GNode", p: bool) -> bool:
+    """Recalcula pn[p] de um nó expandido. Retorna True se o valor mudou.
+    Nó com o jogador p a mover: OR (mínimo). Caso contrário: AND (soma).
+    Filhos ainda não criados contam como pn = 1 (valor de folha desconhecida)."""
+    if not node.children:
+        return False  # folha: mantém o valor de _leaf_pn
+    values = [ch.pn[p] for ch in node.children.values()]
+    values.extend([1.0] * len(node.untried))
+    new = min(values) if node.state.turn == p else sum(values)
+    changed = new != node.pn[p]
+    node.pn[p] = new
+    return changed
 
 
-def pn_rank_bias(pns: Sequence[float]) -> list[float]:
-    """PNRank (fórmula 3) para um conjunto de irmãos: 1 - rank/max_rank.
-
-    Menor proof number -> rank 1. Valores iguais -> mesmo rank (ranking denso).
-    Infinito fica com o maior rank e recebe viés 0.
-    """
-    distinct = sorted(set(pns))
-    rank_of = {v: k + 1 for k, v in enumerate(distinct)}
-    max_rank = len(distinct)
-    return [1.0 - rank_of[v] / max_rank for v in pns]
-
-
-def _update_children_bias(node: GPNNode) -> None:
-    """UPDATECHILDRENPNSCORES: viés dos filhos para o jogador que move em `node`."""
-    i = int(node.player_to_move)
-    biases = pn_rank_bias([ch.pn[i] for ch in node.children])
-    for ch, b in zip(node.children, biases):
-        ch.bias = b
-    node.need_recalc = False
-
-
-def _best_uct_pn_child(node: GPNNode, c: float, cpn: float) -> GPNNode:
-    """BESTUCTPNCHILD: maximiza a fórmula UCT-PN (fórmula 2)."""
-    log_n = math.log(node.visits)
-    return max(
-        node.children,
-        key=lambda ch: (ch.value_sum / ch.visits
-                        + c * math.sqrt(log_n / ch.visits)
-                        + cpn * ch.bias),
-    )
-
-
-@dataclass
-class GPNSearchResult(SearchResult):
-    root_pn: dict = field(default_factory=dict)  # {chess.WHITE: pn, chess.BLACK: pn}
-    # Métricas próprias (seção 7.5 do documento do grupo). Definições:
-    playouts: int = 0            # playouts executados (nó terminal não faz playout)
-    playout_steps: int = 0       # lances jogados dentro dos playouts
-    nodes_visited: int = 0       # nós percorridos na seleção, somados sobre as iterações
-    nodes_expanded: int = 0      # nós criados por expansão (= nodes - 1)
-    transitions: int = 0         # aplicações de lance (seleção + expansão + playout)
-    max_depth: int = 0           # maior profundidade (em plies) de uma folha atingida
-    pn_updates: int = 0          # chamadas a update_proof_number
-    pn_rank_sorts: int = 0       # recálculos do PNRank (cada um ordena os filhos)
-    cpu_time: float = 0.0        # segundos de CPU do processo durante a busca
-    memory_peak_bytes: Optional[int] = None  # pico via tracemalloc (só se track_memory)
-
-
-def gpn_mcts_search(board: chess.Board, time_budget: float, cpn: float = 1.0,
-                    c: float = math.sqrt(2), playout_cap: int = 80,
-                    seed: Optional[int] = None,
-                    max_iterations: Optional[int] = None,
-                    track_memory: bool = False) -> GPNSearchResult:
-    if board.is_game_over():
-        raise ValueError("Posição terminal: não há lance a escolher.")
-
-    if track_memory:
-        was_tracing = tracemalloc.is_tracing()
-        if not was_tracing:
-            tracemalloc.start()
-        tracemalloc.reset_peak()
-
-    rng = random.Random(seed)
-    work = board.copy(stack=False)  # nunca alteramos o tabuleiro do chamador
-    root = GPNNode(work)
-    nodes = 1
-    iterations = playouts = playout_steps = nodes_visited = transitions = 0
-    max_depth = pn_updates = pn_rank_sorts = 0
-    start = time.perf_counter()
-    cpu_start = time.process_time()
-    deadline = start + time_budget
-
-    while True:
-        if iterations > 0 and time.perf_counter() >= deadline:
-            break
-        if max_iterations is not None and iterations >= max_iterations:
-            break
-
-        node = root
-        depth = 0
-        nodes_visited += 1
-
-        # TREE_POLICY: seleção (UCT-PN) + expansão.
-        while not node.terminal:
-            if node.untried:
-                move = node.untried.pop(rng.randrange(len(node.untried)))
-                work.push(move)
-                depth += 1
-                transitions += 1
-                child = GPNNode(work, parent=node, move=move)
-                node.children.append(child)
-                for p in (chess.WHITE, chess.BLACK):
-                    update_proof_number(child, p)
-                    pn_updates += 1
-                node = child
-                nodes += 1
-                nodes_visited += 1
+def _backup_pn(path: list["GNode"]) -> None:
+    """Propaga pn dos ancestrais do último nó do caminho (para cada jogador).
+    Para cedo quando um valor não muda (early stop, como no BACKUP do artigo)."""
+    for p in PLAYERS:
+        for node in reversed(path[:-1]):
+            if not _update_pn(node, p):
                 break
-            if node.need_recalc:
-                _update_children_bias(node)
-                pn_rank_sorts += 1
-            node = _best_uct_pn_child(node, c, cpn)
-            work.push(node.move)
-            depth += 1
-            transitions += 1
-            nodes_visited += 1
-        max_depth = max(max_depth, depth)
 
-        # DEFAULT_POLICY: resultado em +1 / 0 / -1 do ponto de vista das brancas
-        # (mcts.py já usa essa escala).
-        if node.terminal:
-            result = _result_white_pov(work)
+
+# --- Viés UCT-PN (artigo, seção 3.2) -------------------------------------------
+def _bias(pns: list[float], formula: str) -> list[float]:
+    """Viés em [0, 1] para cada irmão, a partir dos pn do jogador a mover.
+    Nó com pn INF recebe 0."""
+    finite = [v for v in pns if v < INF]
+    if not finite:
+        return [0.0] * len(pns)
+    if formula == "max":  # PNMax, eq. (4)
+        lo, hi = min(finite), max(finite)
+        return [0.0 if v == INF else 1.0 - (v - lo) / (1.0 + hi - lo) for v in pns]
+    if formula == "sum":  # PNSum, eq. (5)
+        total = sum(finite)
+        return [0.0 if v == INF else 1.0 - v / (1.0 + total) for v in pns]
+    # PNRank, eq. (3): posto denso entre valores finitos (1 = menor pn)
+    distinct = sorted(set(finite))
+    rank = {v: i + 1 for i, v in enumerate(distinct)}
+    max_rank = len(distinct)
+    return [0.0 if v == INF else 1.0 - rank[v] / max_rank for v in pns]
+
+
+# --- Árvore -------------------------------------------------------------------
+class GNode:
+    """Nó do GPN-MCTS. `total` segue a convenção do MCTS: acumula a utilidade do
+    ponto de vista de `mover` (quem escolheu o lance até este nó)."""
+
+    __slots__ = ("state", "parent", "action", "mover", "depth", "children",
+                 "untried", "terminal", "visits", "total", "exhausted", "pn")
+
+    def __init__(self, state: chess.Board, parent: "GNode | None" = None,
+                 action: Action | None = None) -> None:
+        self.state = state
+        self.parent = parent
+        self.action = action
+        self.mover = parent.state.turn if parent is not None else None
+        self.depth = 0 if parent is None else parent.depth + 1
+        self.children: dict[Action, "GNode"] = {}
+        self.terminal = is_terminal(state)
+        self.untried: list[Action] = [] if self.terminal else list(legal_actions(state))
+        self.visits = 0
+        self.total = 0.0
+        self.exhausted = self.terminal
+        self.pn = _leaf_pn(state)
+
+
+def _select(node: GNode, rng: random.Random, c: float, cpn: float,
+            formula: str) -> GNode:
+    """argmax de v_i + C*sqrt(ln N_p / n_i) + Cpn*PN_i (fórmula UCT-PN, eq. 2).
+    O viés usa os pn de todos os irmãos; a escolha evita subárvores exauridas."""
+    all_kids = list(node.children.values())
+    biases = dict(zip(map(id, all_kids),
+                      _bias([ch.pn[node.state.turn] for ch in all_kids],
+                            formula)))
+    pool = [ch for ch in all_kids if not ch.exhausted] or all_kids
+    log_n = math.log(node.visits)
+    best: list[GNode] = []
+    best_score = -INF
+    for ch in pool:
+        score = (ch.total / ch.visits
+                 + c * math.sqrt(log_n / ch.visits)
+                 + cpn * biases[id(ch)])
+        if score > best_score + _EPS:
+            best, best_score = [ch], score
+        elif score >= best_score - _EPS:
+            best.append(ch)
+    if len(best) == 1:
+        return best[0]
+    return rng.choice(sorted(best, key=lambda ch: ch.action.uci()))
+
+
+def _root_solved(root: GNode) -> bool:
+    """Raiz provada: o jogador a mover vence (pn = 0) ou perde (pn do adversário = 0)."""
+    p = root.state.turn
+    return root.pn[p] == 0 or root.pn[not p] == 0
+
+
+# --- Agente -------------------------------------------------------------------
+class GPNMCTSAgent(Agent):
+    """GPN-MCTS (UCT-PN com números de prova por jogador), sem Score-Bounded."""
+    name = "gpn-mcts"
+
+    def __init__(self, seed: int = 0, c: float = DEFAULT_C,
+                 cpn: float = DEFAULT_CPN, formula: str = "max",
+                 playout_limit: int = PLAYOUT_LIMIT) -> None:
+        if formula not in FORMULAS:
+            raise ValueError(f"Fórmula inválida {formula!r}; use {FORMULAS}")
+        self.seed = seed
+        self.c = c
+        self.cpn = cpn
+        self.formula = formula
+        self.playout_limit = playout_limit
+
+    def choose_action(self, state: chess.Board, budget: Budget) -> Decision:
+        if is_terminal(state):
+            raise ValueError("Não há ação a escolher em estado terminal.")
+
+        clock = Clock(budget)
+        rng = random.Random(self.seed)
+        root = GNode(state)
+        stats = SearchStats()
+
+        try:
+            while not root.exhausted and not clock.exhausted() and not _root_solved(root):
+                self._iterate(root, rng, clock, stats)
+        except BudgetExhausted:
+            pass  # iteração interrompida: não é retropropagada nem anexada
+
+        p = state.turn
+        kids = [ch for ch in root.children.values() if ch.visits > 0]
+        if kids:
+            proven = [ch for ch in kids if ch.pn[p] == 0]  # vitória provada tem prioridade
+            pool = proven or kids
+            best = min(pool, key=lambda ch: (-ch.visits, ch.action.uci()))
+            action, fallback = best.action, False
         else:
-            result, steps = _playout_with_steps(work, rng, playout_cap)
-            playouts += 1
-            playout_steps += steps
-            transitions += steps
+            action = min(legal_actions(state), key=lambda a: a.uci())
+            fallback = True
 
-        # BACKUP (a): visitas e recompensa até a raiz.
-        v = node
-        while v is not None:
-            v.visits += 1
-            v.value_sum += result if v.player_just_moved == chess.WHITE else -result
-            v = v.parent
+        root_pn = root.pn[p]
+        return Decision(
+            action=action,
+            nodes_expanded=stats.nodes_expanded,
+            nodes_visited=stats.nodes_visited,
+            max_depth_reached=stats.max_depth,
+            extra={
+                "algorithm": "gpn-mcts",
+                "formula": self.formula,
+                "cpn": self.cpn,
+                "iterations": stats.iterations,
+                "playouts": stats.playouts,
+                "playout_steps": stats.playout_steps,
+                "transitions": clock.transitions,
+                "tree_nodes": 1 + stats.nodes_expanded,
+                "root_visits": root.visits,
+                "root_pn": None if root_pn == INF else root_pn,
+                "root_solved": _root_solved(root),
+                "time_s": clock.elapsed(),
+                "fallback": fallback,
+            },
+        )
 
-        # BACKUP (b): proof numbers, um jogador por vez, com parada antecipada.
-        for p in (chess.WHITE, chess.BLACK):
-            v = node
-            changed = True
-            while changed and v is not None:
-                changed = update_proof_number(v, p)
-                pn_updates += 1
-                if changed and v.parent is not None:
-                    v.parent.need_recalc = True
-                v = v.parent
+    def _iterate(self, root: GNode, rng: random.Random, clock: Clock,
+                 stats: SearchStats) -> None:
+        """Seleção UCT-PN, expansão, playout, retropropagação de pn e de visitas."""
+        node = root
+        path = [root]
+        stats.nodes_visited += 1
 
-        for _ in range(depth):
-            work.pop()
-        iterations += 1
+        # 1) Seleção
+        while not node.terminal and not node.untried:
+            node = _select(node, rng, self.c, self.cpn, self.formula)
+            path.append(node)
+            stats.nodes_visited += 1
 
-    # Escolha final: mais visitas; empate decidido pelo UCI (ordem lexicográfica).
-    best = min(root.children, key=lambda ch: (-ch.visits, ch.move.uci()))
+        # 2) Expansão: o filho é criado mas só é anexado após o playout,
+        #    para que um corte de orçamento não deixe nós sem estatística.
+        child = None
+        action = None
+        if node.untried:
+            clock.check()
+            action = node.untried.pop(rng.randrange(len(node.untried)))
+            child = GNode(next_state(node.state, action), node, action)
+            leaf = child
+        else:
+            leaf = node
 
-    memory_peak = None
-    if track_memory:
-        memory_peak = tracemalloc.get_traced_memory()[1]
-        if not was_tracing:
-            tracemalloc.stop()
+        # 3) Playout (heurística H nunca vira prova)
+        value, steps = playout(leaf.state, rng, clock, self.playout_limit)
+        stats.playouts += 1
+        stats.playout_steps += steps
 
-    return GPNSearchResult(
-        move=best.move,
-        iterations=iterations,
-        nodes=nodes,
-        elapsed=time.perf_counter() - start,
-        root_visits={ch.move: ch.visits for ch in root.children},
-        root_pn={chess.WHITE: root.pn[1], chess.BLACK: root.pn[0]},
-        playouts=playouts,
-        playout_steps=playout_steps,
-        nodes_visited=nodes_visited,
-        nodes_expanded=nodes - 1,
-        transitions=transitions,
-        max_depth=max_depth,
-        pn_updates=pn_updates,
-        pn_rank_sorts=pn_rank_sorts,
-        cpu_time=time.process_time() - cpu_start,
-        memory_peak_bytes=memory_peak,
-    )
+        # 4) Anexa o filho e retropropaga pn
+        if child is not None:
+            node.children[action] = child
+            path.append(child)
+            stats.nodes_expanded += 1
+            stats.nodes_visited += 1
+            stats.max_depth = max(stats.max_depth, child.depth)
+            _backup_pn(path)
 
+        # 5) Retropropagação das visitas e valores (como no MCTS clássico)
+        for n in reversed(path):
+            n.visits += 1
+            if n.mover is not None:
+                n.total += value if n.mover == chess.WHITE else -value
+            n.exhausted = n.terminal or (
+                not n.untried and all(ch.exhausted for ch in n.children.values())
+            )
 
-def choose_action(board: chess.Board, time_budget: float, **kwargs) -> chess.Move:
-    """Interface padronizada do grupo: estado + orçamento (segundos) -> lance."""
-    return gpn_mcts_search(board, time_budget, **kwargs).move
+        stats.iterations += 1

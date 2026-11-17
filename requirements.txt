@@ -1,2 +1,6 @@
-python-chess>=1.11
-pytest
+pandas
+matplotlib
+numpy
+zstandard
+python-chess==1.999
+pytest>=7
