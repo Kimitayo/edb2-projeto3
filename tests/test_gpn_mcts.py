@@ -28,8 +28,10 @@ def test_default_config_matches_project_plan():
 
 
 def test_decision_reports_configuration():
-    d = GPNMCTSAgent(seed=0).choose_action(initial_state(START_FEN),
-                                           Budget(max_transitions=1500))
+    d = GPNMCTSAgent(seed=0).choose_action(
+        initial_state(START_FEN),
+        Budget(max_transitions=3000),
+    )
     assert d.extra["formula"] == "rank"
     assert d.extra["score_bounded"] is True
     assert d.extra["cpn"] == 1.0
