@@ -45,9 +45,9 @@ def test_transitions_respect_budget():
     reset_transition_count()
     state = initial_state()
     decision = MCTSAgent(seed=2).choose_action(state, Budget(max_transitions=500))
-    assert decision.extra["transitions"] <= 500
+    assert decision.transitions <= 500
     # O contador global deve bater com o que o agente declarou
-    assert transition_count() == decision.extra["transitions"]
+    assert transition_count() == decision.transitions
 
 
 def test_more_budget_means_more_iterations():
@@ -124,3 +124,29 @@ def test_playout_with_zero_budget_raises():
 def test_heuristic_is_bounded(fen):
     value = heuristic_white(initial_state(fen))
     assert -1.0 <= value <= 1.0
+
+
+# --- Contrato único (Seção 12.2) e orçamento por tempo --------------------------
+def test_zero_transition_budget_returns_legal_fallback():
+    state = initial_state()
+    d = MCTSAgent(seed=1).choose_action(state, Budget(max_transitions=0))
+    assert d.action in legal_actions(state)
+    assert d.extra["fallback"] is True
+
+
+def test_time_budget_is_respected_and_reported():
+    state = initial_state()
+    d = MCTSAgent(seed=1).choose_action(state, Budget(max_time_ms=50))
+    assert d.action in legal_actions(state)
+    assert d.extra["elapsed_ms"] < 50 + 100  # folga para a última transição
+    assert d.extra["cpu_ms"] >= 0
+    assert d.transitions > 0
+
+
+def test_decision_exposes_common_metrics():
+    d = MCTSAgent(seed=1).choose_action(initial_state(), Budget(max_transitions=300))
+    assert d.transitions <= 300
+    assert d.nodes_visited >= d.nodes_expanded > 0
+    for key in ("tree_nodes_created", "elapsed_ms", "cpu_ms", "budget_overrun"):
+        assert key in d.extra
+    assert d.extra["budget_overrun"] is False
