@@ -28,23 +28,46 @@ import chess
 from game import Action, legal_actions
 
 
+
 @dataclass(frozen=True)
 class Budget:
-    """Orçamento computacional de uma decisão.
+    """Orçamento computacional de uma decisão."""
 
-    max_time_ms é o formato oficial.
-    max_time_s é mantido para compatibilidade com implementações antigas.
-
-    Os dois campos de tempo são sincronizados automaticamente.
-    """
-
-    # Mantidos nesta ordem para preservar a compatibilidade posicional.
     max_transitions: Optional[int] = None
     max_time_s: Optional[float] = None
     max_depth: Optional[int] = None
-
-    # Formato oficial definido na seção 12.2 do projeto.
     max_time_ms: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Sincroniza os formatos de tempo."""
+
+        if self.max_time_ms is not None and self.max_time_s is not None:
+            expected_ms = self.max_time_s * 1000.0
+
+            if not math.isclose(
+                float(self.max_time_ms),
+                float(expected_ms),
+                rel_tol=1e-9,
+                abs_tol=1e-9,
+            ):
+                raise ValueError(
+                    "max_time_ms e max_time_s representam "
+                    "tempos diferentes."
+                )
+
+        elif self.max_time_s is not None:
+            object.__setattr__(
+                self,
+                "max_time_ms",
+                self.max_time_s * 1000.0,
+            )
+
+        elif self.max_time_ms is not None:
+            object.__setattr__(
+                self,
+                "max_time_s",
+                self.max_time_ms / 1000.0,
+            )
 
 
 def __post_init__(self) -> None:
