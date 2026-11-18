@@ -158,21 +158,38 @@ def _is_claim_draw(action) -> bool:
     return type(action).__name__ == "ClaimDraw"
 
 
+
 def _is_legal(board, action) -> bool:
-    """A acao esta entre as acoes legais do MOTOR (inclui ClaimDraw)?"""
+    """Verifica se a ação é legal pelo motor ou pela interface do tabuleiro."""
+
     try:
         from game import legal_actions
-    except ImportError:          # sem motor (testes com tabuleiro falso)
-        if _is_claim_draw(action):
-            return bool(board.can_claim_draw())
+    except ImportError:
+        legal_actions = None
+
+    # Primeiro tenta utilizar o motor oficial.
+    if legal_actions is not None:
         try:
-            return action in board.legal_moves
+            return action in legal_actions(board)
+        except (AttributeError, TypeError):
+            # Compatibilidade com tabuleiros simulados
+            # que não implementam toda a interface do motor.
+            pass
+
+    # Tratamento de reivindicação de empate.
+    if _is_claim_draw(action):
+        try:
+            return bool(board.can_claim_draw())
         except Exception:
             return False
+
+    # Fallback para a interface padrão do python-chess
+    # e para tabuleiros simulados.
     try:
-        return action in legal_actions(board)
+        return action in board.legal_moves
     except Exception:
         return False
+
 
 
 def _transition_counter():
