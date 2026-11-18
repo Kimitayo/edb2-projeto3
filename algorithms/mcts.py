@@ -21,6 +21,7 @@ from algorithms.base import Agent, Budget, Decision
 PLAYOUT_LIMIT = 80            # meios-lances por playout (plano do projeto)
 DEFAULT_C = math.sqrt(2)      # constante de exploração UCT
 _EPS = 1e-12
+OVERRUN_TOLERANCE_MS = 1.0    # folga de `budget_overrun`: a busca para ao cruzar o prazo
 
 # --- Heurística (H) -----------------------------------------------------------
 try:
@@ -68,26 +69,44 @@ class Clock:
     Tempo é opcional e só deve ser usado em experimentos de tempo real."""
 
     def __init__(self, budget: Budget) -> None:
-        if budget.max_transitions is None and budget.max_time_s is None:
-            raise ValueError("Orçamento sem limite: defina max_transitions ou max_time_s.")
+        if budget.max_transitions is None and budget.max_time_ms is None:
+            raise ValueError("Orçamento sem limite: defina max_transitions ou max_time_ms.")
         self.max_transitions = budget.max_transitions
-        self.max_time_s = budget.max_time_s
-        self._t0 = time.perf_counter()
+        self.max_time_ms = budget.max_time_ms
+        self._t0 = time.perf_counter_ns()      # tempo real (Seção 8.3)
+        self._cpu0 = time.process_time_ns()    # tempo de CPU (Seção 8.3)
+        self._deadline = (None if budget.max_time_ms is None
+                          else self._t0 + int(budget.max_time_ms * 1_000_000))
         self._tr0 = transition_count()
 
     @property
     def transitions(self) -> int:
         return transition_count() - self._tr0
 
-    def elapsed(self) -> float:
-        return time.perf_counter() - self._t0
+    def elapsed_ms(self) -> float:
+        return (time.perf_counter_ns() - self._t0) / 1e6
+
+    def cpu_ms(self) -> float:
+        return (time.process_time_ns() - self._cpu0) / 1e6
 
     def exhausted(self) -> bool:
         if self.max_transitions is not None and self.transitions >= self.max_transitions:
             return True
-        if self.max_time_s is not None and self.elapsed() >= self.max_time_s:
+        if self._deadline is not None and time.perf_counter_ns() >= self._deadline:
             return True
         return False
+
+    def overrun(self) -> bool:
+        """Orçamento ultrapassado (métrica `budget_overrun`, Seção 8.4)."""
+        if self.max_transitions is not None and self.transitions > self.max_transitions:
+            return True
+        return (self._deadline is not None and time.perf_counter_ns()
+                > self._deadline + int(OVERRUN_TOLERANCE_MS * 1_000_000))
+
+    def common_extra(self) -> dict:
+        """Métricas de custo comuns (Seção 8.4), para o `extra` das decisões."""
+        return {"elapsed_ms": self.elapsed_ms(), "cpu_ms": self.cpu_ms(),
+                "budget_overrun": self.overrun()}
 
     def check(self) -> None:
         if self.exhausted():
@@ -185,31 +204,28 @@ class MCTSAgent(Agent):
         except BudgetExhausted:
             pass  # a iteração interrompida não é retropropagada
 
-        if root.children:
-            if root.visits > 0: 
-                best = min(root.children.values(),
-                       key=lambda ch: (-ch.visits, ch.action.uci()))
-                action = best.action
-                fallback = False
-            else:
-                action = min(legal_actions(state), key=lambda a: a.uci())
-                fallback = True
-
+        kids = [ch for ch in root.children.values() if ch.visits > 0]
+        if kids:  # escolha final: mais visitas; empate por UCI
+            best = min(kids, key=lambda ch: (-ch.visits, ch.action.uci()))
+            action, fallback = best.action, False
+        else:     # orçamento acabou antes de qualquer iteração completa
+            action = min(legal_actions(state), key=lambda a: a.uci())
+            fallback = True
 
         return Decision(
             action=action,
-            nodes_expanded=stats.nodes_expanded,
             nodes_visited=stats.nodes_visited,
+            nodes_expanded=stats.nodes_expanded,
+            transitions=clock.transitions,
             max_depth_reached=stats.max_depth,
             extra={
                 "algorithm": "mcts",
                 "iterations": stats.iterations,
                 "playouts": stats.playouts,
                 "playout_steps": stats.playout_steps,
-                "transitions": clock.transitions,
-                "tree_nodes": 1 + stats.nodes_expanded,
+                "tree_nodes_created": 1 + stats.nodes_expanded,
                 "root_visits": root.visits,
-                "time_s": clock.elapsed(),
+                **clock.common_extra(),
                 "fallback": fallback,
             },
         )
