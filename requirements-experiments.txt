@@ -1,0 +1,5 @@
+# Dependencias EXTRAS usadas so por experiments/ (alem de python-chess e pytest do requirements.txt)
+pandas
+matplotlib
+numpy
+zstandard   # so para ler arquivos .pgn.zst do Lichess
