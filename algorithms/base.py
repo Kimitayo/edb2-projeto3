@@ -70,40 +70,6 @@ class Budget:
             )
 
 
-def __post_init__(self) -> None:
-    """Sincroniza os formatos de tempo."""
-
-    # Se os dois formatos forem informados, verifica
-    # se representam o mesmo tempo.
-    if self.max_time_ms is not None and self.max_time_s is not None:
-        expected_ms = self.max_time_s * 1000.0
-
-        if not math.isclose(
-            float(self.max_time_ms),
-            float(expected_ms),
-            rel_tol=1e-9,
-            abs_tol=1e-9,
-        ):
-            raise ValueError(
-                "max_time_ms e max_time_s representam "
-                "tempos diferentes."
-            )
-
-    # Segundos -> milissegundos.
-    elif self.max_time_s is not None:
-        object.__setattr__(
-            self,
-            "max_time_ms",
-            self.max_time_s * 1000.0,
-        )
-
-    # Milissegundos -> segundos.
-    elif self.max_time_ms is not None:
-        object.__setattr__(
-            self,
-            "max_time_s",
-            self.max_time_ms / 1000.0,
-        )
 
 
 @dataclass

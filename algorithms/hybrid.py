@@ -411,6 +411,7 @@ class HybridAgent(Agent):
 
             return Decision(
                 action=actions[0],
+                transitions=selection_transitions,
                 extra={"hybrid": hybrid_info},
             )
 
@@ -446,6 +447,7 @@ class HybridAgent(Agent):
 
         return Decision(
             action=decision.action,
+            transitions=total_transitions,
             nodes_expanded=decision.nodes_expanded,
             nodes_visited=decision.nodes_visited,
             max_depth_reached=decision.max_depth_reached,

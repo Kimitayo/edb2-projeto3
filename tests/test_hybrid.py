@@ -806,6 +806,7 @@ def test_hybrid_agent_deducts_selection_transitions(monkeypatch):
 
     assert decision.extra["hybrid"]["selection_transitions"] == 2
     assert decision.extra["hybrid"]["total_transitions"] == 5
+    assert decision.transitions == 5
 
 
 # =========================================================
@@ -878,6 +879,7 @@ def test_hybrid_agent_fallback_when_transitions_are_exhausted(monkeypatch):
     assert len(gpn_mcts.calls) == 0
 
     assert decision.extra["hybrid"]["fallback"] == "budget_exhausted"
+    assert decision.transitions == 500
 
 
 # =========================================================

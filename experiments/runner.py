@@ -396,12 +396,15 @@ def play_game(white: str, black: str, budget, *, game_id, seeds, factories, deci
             agent=name, seed=seed if name in SEEDED_AGENTS else None, repetition=0,
             budget=budget, commit=commit))
         run_id += 1
+
         if out.status != "ok":
             failures += 1
-        if out.status in ("illegal_action", "error"):    # falha: a partida NAO vira empate
             status, termination = "failure", f"{out.status}:{name}"
             break
+
         state = next_state(state, out.decision.action)
+
+        
     if status == "completed":
         outcome = get_outcome(state)
         result, termination = outcome.result.value, outcome.reason or ""

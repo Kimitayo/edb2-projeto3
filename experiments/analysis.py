@@ -310,12 +310,33 @@ def plot_games(games, plots_dir):
     if games.empty:
         return []
     done = games[games.status == "completed"]
+    from experiments.runner import MATCHUPS
+
     rows = []
-    for matchup, g in done.groupby("matchup"):
-        a, b = matchup.split("_vs_")
-        wa = ((g.white == a) & (g.result == "1-0")).sum() + ((g.black == a) & (g.result == "0-1")).sum()
-        wb = ((g.white == b) & (g.result == "1-0")).sum() + ((g.black == b) & (g.result == "0-1")).sum()
-        rows.append((f"{AGENT_LABEL[a]}\nx {AGENT_LABEL[b]}", wa, (g.result == "1/2-1/2").sum(), wb))
+    for a, b in MATCHUPS:
+        a_de_brancas = (done.white == a) & (done.black == b)
+        a_de_pretas = (done.white == b) & (done.black == a)
+        partidas = done[a_de_brancas | a_de_pretas]
+
+        if partidas.empty:
+            continue
+
+        vitorias_brancas = partidas.result == "1-0"
+        vitorias_pretas = partidas.result == "0-1"
+
+        vitorias_a = (
+            ((partidas.white == a) & vitorias_brancas)
+            | ((partidas.black == a) & vitorias_pretas)
+        ).sum()
+
+        vitorias_b = (
+            ((partidas.white == b) & vitorias_brancas)
+            | ((partidas.black == b) & vitorias_pretas)
+        ).sum()
+
+        empates = (partidas.result == "1/2-1/2").sum()
+        rotulo = f"{AGENT_LABEL[a]}\nx {AGENT_LABEL[b]}"
+        rows.append((rotulo, vitorias_a, empates, vitorias_b))
     if not rows:
         return []
     labels, wa, dr, wb = zip(*rows)
