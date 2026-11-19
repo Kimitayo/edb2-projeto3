@@ -353,7 +353,7 @@ class GPNMCTSAgent(Agent):
                 "proof_updates": stats.proof_updates,
                 "pnrank_sorts": stats.pnrank_sorts,
                 "bias_cache_hits": stats.bias_cache_hits,
-                "tree_nodes_created": 1 + stats.nodes_expanded,
+                "tree_nodes_created": stats.tree_nodes_created,
                 "root_visits": root.visits,
                 "root_pn": None if root_pn == INF else root_pn,
                 "root_bounds": (root.pess, root.opti),
@@ -391,16 +391,23 @@ class GPNMCTSAgent(Agent):
             leaf = node
 
         # 3) Playout (heurística H nunca vira prova nem limite)
-        value, steps = playout(leaf.state, rng, clock, self.playout_limit)
+        inicio_playout = clock.transitions
+        try:
+            value, _ = playout(leaf.state, rng, clock, self.playout_limit)
+        finally:
+            stats.playout_steps += clock.transitions - inicio_playout
+
         stats.playouts += 1
-        stats.playout_steps += steps
 
         # 4) Anexa o filho e retropropaga pn (e limites Score-Bounded)
         if child is not None:
+            if not node.children:
+                stats.nodes_expanded += 1
+
             node.children[action] = child
-            node.need_recalc = True  # novo irmão: o viés do pai precisa ser refeito
+            stats.tree_nodes_created += 1
+            node.need_recalc = True
             path.append(child)
-            stats.nodes_expanded += 1
             stats.nodes_visited += 1
             stats.max_depth = max(stats.max_depth, child.depth)
             _backup_pn(path, stats, self.score_bounded)

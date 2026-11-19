@@ -54,3 +54,12 @@ def test_orcamento_minusculo_retorna_primeira_uci():
     d = MinimaxAgent().choose_action(board, Budget(max_transitions=1))
     assert d.action.uci() == min(m.uci() for m in board.legal_moves)
     assert d.extra["complete_depth"] == 0
+
+
+def test_expansao_exige_que_o_primeiro_filho_seja_gerado():
+    for limite, expansoes_esperadas in [(20, 1), (21, 2), (22, 3)]:
+        decisao = MinimaxAgent().choose_action(
+            chess.Board(),
+            Budget(max_transitions=limite),
+        )
+        assert decisao.nodes_expanded == expansoes_esperadas, f"limite={limite}"

@@ -157,7 +157,8 @@ class SearchStats:
     iterations: int = 0
     playouts: int = 0
     playout_steps: int = 0
-    nodes_expanded: int = 0   # nós criados na árvore (um por expansão)
+    nodes_expanded: int = 0       # pais que receberam pelo menos um filho
+    tree_nodes_created: int = 1   # a árvore começa com a raiz
     nodes_visited: int = 0    # nós percorridos na seleção/expansão
     max_depth: int = 0
 
@@ -223,7 +224,7 @@ class MCTSAgent(Agent):
                 "iterations": stats.iterations,
                 "playouts": stats.playouts,
                 "playout_steps": stats.playout_steps,
-                "tree_nodes_created": 1 + stats.nodes_expanded,
+                "tree_nodes_created": stats.tree_nodes_created,
                 "root_visits": root.visits,
                 **clock.common_extra(),
                 "fallback": fallback,
@@ -248,17 +249,24 @@ class MCTSAgent(Agent):
             clock.check()
             action = node.untried.pop(rng.randrange(len(node.untried)))
             child = Node(next_state(node.state, action), node, action)
+            if not node.children:
+                stats.nodes_expanded += 1
+
             node.children[action] = child
+            stats.tree_nodes_created += 1
             node = child
             path.append(child)
-            stats.nodes_expanded += 1
             stats.nodes_visited += 1
             stats.max_depth = max(stats.max_depth, child.depth)
 
         # 3) Playout
-        value, steps = playout(node.state, rng, clock, self.playout_limit)
+        inicio_playout = clock.transitions
+        try:
+            value, _ = playout(node.state, rng, clock, self.playout_limit)
+        finally:
+            stats.playout_steps += clock.transitions - inicio_playout
+
         stats.playouts += 1
-        stats.playout_steps += steps
 
         # 4) Retropropagação
         for n in reversed(path):
